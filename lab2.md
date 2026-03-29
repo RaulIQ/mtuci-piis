@@ -2,7 +2,7 @@
 
 **ФИО:** Алимбеков Рауль Азатович  
 **Группа:** БВТ2201  
-**Тема проекта:** Разработка гибридного ML-сервиса для классификации акустических событий в реальном времени с поддержкой Edge-вычислений (распознавание названий цветов: "red", "green", "blue" и др.)
+**Тема проекта:** Разработка гибридного ML-сервиса для классификации акустических событий в реальном времени с поддержкой Edge-вычислений (распознавание команд: "yes", "no", "stop")
 
 ---
 
@@ -112,7 +112,7 @@
 - **Ingestion Gateway** теперь поддерживает долгоживущие стриминговые сессии.  
 - **Протокол AFE ↔ Gateway:** WebSocket / gRPC bidirectional streaming (или MQTT publish/subscribe).  
 - **Протокол Gateway ↔ ML Engine:** внутренний асинхронный (Redis Stream).  
-- **Ответ ESP32:** JSON пушится только при срабатывании (`{"predicted_class": "red", "confidence": 0.94, "timestamp": "..."}`).
+- **Ответ ESP32:** JSON пушится только при срабатывании (`{"predicted_class": "yes", "confidence": 0.94, "timestamp": "..."}`).
 
 ### 4.3 Обновлённый стек технологий (Шаг 7 ЛР1)
 **Дополнения и корректировки:**
@@ -137,6 +137,3 @@
 - Google Speech Commands v2 — официальная документация по speaker-independent splits.  
 - Best practices streaming Keyword Spotting (Mozilla Common Voice + TensorFlow/Kaldi).  
 - DVC + MLflow — официальные рекомендации по reproducible ML.
-
-Готово к вставке в репозиторий (`docs/lab2.md`).  
-Если нужно обновить диаграммы из ЛР1 под streaming — скажи, сделаю сразу.
