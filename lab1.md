@@ -61,6 +61,43 @@
   3. Построение и визуализация log-mel спектрограмм для разных слов с целью визуальной оценки разделимости классов.
   4. Анализ уровня фонового шума.
 
+---
+
+## Шаг 5. Проектирование высокоуровневой архитектуры системы
+### 5.1 Контекстная диаграмма
+
+```mermaid
+graph TD
+    %% Описание узлов устройства
+    subgraph ESP32 [Edge Device: ESP32]
+        A[Microphone] --> B{Processing Logic}
+    end
+
+    %% Описание узлов сервера
+    subgraph Docker [ML Service: Docker Container]
+        C[Ingestion API]
+        D[Preprocessor Module]
+        E[Inference Engine]
+        F[Decision Maker]
+        
+        C --> D
+        D --> E
+        E --> F
+    end
+
+    %% Потоки данных с выделением цветом
+    B ==>|Cloud Path: RAW Audio| C
+    B -.->|Hybrid Path: Spectrogram| C
+    F ===>|JSON Result| B
+
+    %% Стилизация
+    style B fill:#f9f,stroke:#333,stroke-width:2px
+    style ESP32 fill:#e1f5fe,stroke:#01579b
+    style Docker fill:#fff3e0,stroke:#e65100
+    linkStyle 2 stroke:#ff0000,stroke-width:2px,color:red;
+    linkStyle 3 stroke:#00ff00,stroke-width:2px,color:green;
+```
+
 
 
 
