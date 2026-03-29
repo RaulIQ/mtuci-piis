@@ -151,6 +151,90 @@ graph TD
 
  - **Куда сохраняются результаты:** Возвращенный JSON с предсказанным классом и уверенностью (confidence) используется на самом ESP32 для выполнения действия (например, переключения светодиода). Метаданные о запросе (время отклика, выбранный режим обработки, результат) асинхронно сохраняются в Time-series DB.
 
+--- 
+
+ ## Шаг 6. Выделение модулей и протоколов взаимодействия
+
+ ### 6.1 Основные модули и их ответственность
+
+| Модуль                    | Расположение        | Ответственность (Responsibility)                                                                 |
+|--------------------------|---------------------|--------------------------------------------------------------------------------------------------|
+| Acoustic Front-End (AFE) | Edge (ESP32)        | Захват аудио с микрофона (I2S), нормализация, опциональное извлечение признаков (STFT/Log-Mel) и упаковка данных для отправки. |
+| Ingestion Gateway        | Cloud (Docker)      | Прием входящих запросов, валидация формата (WAV или массив фичей), аутентификация устройства и маршрутизация к ML-движку.     |
+| ML Inference Engine      | Cloud (Docker)      | Загрузка весов CNN-модели, выполнение инференса (классификация цвета) и формирование JSON-ответа с вероятностями классов.     |
+| Analytics & Registry     | Cloud / External    | Хранение истории запросов, логирование задержек и версионирование моделей (Model Registry).                                    |
+
+### 6.2 Протоколы взаимодействия между модулями
+
+**Основные протоколы и форматы обмена данными:**
+
+- **Acoustic Front-End (AFE) ↔ Ingestion Gateway**  
+  Протокол: **HTTP POST** (REST) или **MQTT Publish/Subscribe** (рекомендуется для реального времени и низкой задержки).  
+  Формат данных: JSON-объект, содержащий либо base64-encoded сырой WAV/PCM (16 кГц), либо уже извлечённый массив log-mel спектрограммы (float32, shape ≈ [1, 128, 32]).  
+  Аутентификация: JWT-токен или API-key в заголовках.
+
+- **Ingestion Gateway ↔ ML Inference Engine**  
+  Протокол: **внутренний вызов** внутри одного Docker-контейнера (Python-функция или внутренний FastAPI/gRPC-эндпоинт).  
+  Формат: Python dict / NumPy-массив признаков + метаданные устройства.
+
+- **ML Inference Engine ↔ Analytics & Registry**  
+  Протокол: **асинхронный** (Celery task / Kafka / прямой клиент БД).  
+  Формат: JSON с метриками (latency, confidence, выбранный режим — cloud/hybrid, device_id).
+
+- **ML Inference Engine ↔ S3 Storage**  
+  Протокол: **HTTP GET** (AWS SDK / boto3).  
+  Выполняется при старте контейнера или при обновлении версии модели (Model Registry).
+
+- **Analytics & Registry ↔ Time-series DB**  
+  Протокол: **прямое подключение** (InfluxDB client / TimescaleDB / Prometheus remote write).  
+  Формат: временные ряды метрик + логи предсказаний.
+
+- **Ingestion Gateway ↔ ESP32 (ответ)**  
+  Тот же протокол, что и входящий запрос (HTTP Response / MQTT).  
+  Формат ответа: компактный JSON `{ "predicted_class": "red", "confidence": 0.94, "latency_ms": 45 }`.
+
+Все протоколы выбраны с учётом ограничений Edge-устройства (малый размер пакетов, низкое энергопотребление) и требований реального времени (latency < 200 мс end-to-end).
+
+## 6.3 Диаграмма взаимодействия модулей
+
+```mermaid
+graph LR
+    %% Edge-устройство
+    A[Acoustic Front-End<br>ESP32] 
+    G[Логика управления<br>Action ESP32]
+
+    %% Облачные модули (Docker)
+    B[Ingestion Gateway<br>Docker Container]
+    C[ML Inference Engine<br>CNN]
+
+    %% Внешние системы и Registry
+    D[Analytics & Registry]
+    E[(S3 Storage:<br>Веса моделей)]
+    F[(Time-series DB:<br>Метрики и логи)]
+
+    %% Основной поток инференса
+    A -->|HTTP POST / MQTT<br>WAV или log-mel features| B
+    B -->|internal call<br>REST / gRPC| C
+    C -->|JSON class, confidence| B
+    B -->|HTTP / MQTT<br>JSON-ответ| A
+    A -->|управляющий сигнал| G
+
+    %% Потоки обучения и телеметрии
+    E -->|загрузка весов модели<br>HTTP GET| C
+    C -.->|асинхронно: latency + result<br>Kafka / Celery| D
+    D -->|store metrics & logs| F
+    D <-->|Model Registry<br>versioning| E
+
+    %% Стилизация для читаемости
+    style A fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style G fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style B fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style C fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style D fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style E fill:#e8f5e9,stroke:#2e7d32
+    style F fill:#e8f5e9,stroke:#2e7d32
+```
+
 
 
 
