@@ -9,5 +9,7 @@ __pycache__/
 
 # Lab 3 artifacts and data
 data/
-artifacts/
+# Всё в artifacts кроме чекпоинта CNN (нужен для демо / воспроизводимости)
+artifacts/*
+!artifacts/kws_cnn.pt
 *.joblib
