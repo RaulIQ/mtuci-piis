@@ -8,3 +8,4 @@ joblib
 torchaudio
 torch
 tqdm
+sounddevice
