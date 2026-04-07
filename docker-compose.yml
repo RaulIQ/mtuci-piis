@@ -1,0 +1,36 @@
+services:
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    container_name: kws-inference
+    environment:
+      MODEL_PATH: artifacts/kwc_cnn.pt
+      DB_PATH: /data/requests.db
+    volumes:
+      - inference_data:/data
+      - ./artifacts:/app/artifacts:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: kws-ui
+    environment:
+      API_URL: http://inference:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      inference:
+        condition: service_healthy
+
+volumes:
+  inference_data:
+

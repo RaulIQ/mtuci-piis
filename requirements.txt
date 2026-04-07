@@ -9,3 +9,9 @@ torchaudio
 torch
 tqdm
 sounddevice
+fastapi
+uvicorn
+python-multipart
+prometheus-client
+streamlit
+requests
