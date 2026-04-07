@@ -12,3 +12,10 @@ class PredictResponse(BaseModel):
     model_version: str
     top_k: list[dict[str, float]]
 
+
+class StreamPredictResponse(BaseModel):
+    windows_processed: int
+    detections_count: int
+    detections: list[dict[str, float | str]]
+    window_predictions: list[dict[str, float | str]]
+

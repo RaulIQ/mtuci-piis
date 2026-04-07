@@ -28,6 +28,7 @@ API is available at:
 - `GET /ready` - model loaded status and labels
 - `POST /predict` - WAV file upload (multipart)
 - `POST /predict-base64` - WAV bytes in base64 JSON
+- `POST /predict-stream` - server-side sliding window + refractory
 - `GET /metrics` - basic service metrics
 
 ## How to Send Audio

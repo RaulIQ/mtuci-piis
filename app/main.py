@@ -6,14 +6,15 @@ import time
 from datetime import datetime, timezone
 
 import librosa
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.model import KwsInferenceService
 from app.monitoring import INFERENCE_LATENCY_MS, REQUEST_LATENCY_MS, REQUESTS_TOTAL
-from app.schemas import PredictAudioRequest, PredictResponse
+from app.schemas import PredictAudioRequest, PredictResponse, StreamPredictResponse
 from app.storage import RequestLogStore
+from app.streaming import SlidingWindowProcessor, StreamParams
 
 
 logging.basicConfig(
@@ -28,6 +29,7 @@ DB_PATH = os.getenv("DB_PATH", "storage/requests.db")
 app = FastAPI(title="KWS Inference Service", version="1.0.0")
 store = RequestLogStore(DB_PATH)
 service = KwsInferenceService(MODEL_PATH)
+streaming = SlidingWindowProcessor(service)
 
 
 @app.get("/health")
@@ -136,5 +138,49 @@ def predict_base64(payload: PredictAudioRequest):
     except Exception as exc:  # pylint: disable=broad-except
         REQUESTS_TOTAL.labels(endpoint="/predict-base64", status="error").inc()
         logger.exception("predict_base64_failed error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/predict-stream", response_model=StreamPredictResponse)
+async def predict_stream(
+    file: UploadFile = File(...),
+    stride_sec: float = Form(0.25),
+    refractory_sec: float = Form(0.8),
+    confidence_threshold: float = Form(0.55),
+    target_labels: str = Form("one,two,three,four,five,six,seven,eight,nine"),
+):
+    started = time.perf_counter()
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        audio, sr = librosa.load(io.BytesIO(content), sr=None, mono=True)
+        labels_set = {x.strip() for x in target_labels.split(",") if x.strip()}
+        params = StreamParams(
+            stride_sec=stride_sec,
+            refractory_sec=refractory_sec,
+            confidence_threshold=confidence_threshold,
+            target_labels=labels_set,
+        )
+        result = streaming.run(audio, sr, params)
+
+        latency_ms = (time.perf_counter() - started) * 1000
+        REQUEST_LATENCY_MS.labels(endpoint="/predict-stream").observe(latency_ms)
+        REQUESTS_TOTAL.labels(endpoint="/predict-stream", status="ok").inc()
+        logger.info(
+            "predict_stream_ok file=%s windows=%s detections=%s latency_ms=%.2f",
+            file.filename,
+            result["windows_processed"],
+            result["detections_count"],
+            latency_ms,
+        )
+        return StreamPredictResponse(**result)
+    except HTTPException:
+        REQUESTS_TOTAL.labels(endpoint="/predict-stream", status="bad_request").inc()
+        raise
+    except Exception as exc:  # pylint: disable=broad-except
+        REQUESTS_TOTAL.labels(endpoint="/predict-stream", status="error").inc()
+        logger.exception("predict_stream_failed error=%s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
