@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 
 import librosa
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -15,6 +15,7 @@ from app.monitoring import INFERENCE_LATENCY_MS, REQUEST_LATENCY_MS, REQUESTS_TO
 from app.schemas import PredictAudioRequest, PredictResponse, StreamPredictResponse
 from app.storage import RequestLogStore
 from app.streaming import SlidingWindowProcessor, StreamParams
+from app.ws_kws import handle_kws_ws
 
 
 logging.basicConfig(
@@ -23,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kws-service")
 
-MODEL_PATH = os.getenv("MODEL_PATH", "artifacts/colab_kws_cnn.pt")
+MODEL_PATH = os.getenv("MODEL_PATH", "artifacts/kws_resnet.pt")
 DB_PATH = os.getenv("DB_PATH", "storage/requests.db")
 
 app = FastAPI(title="KWS Inference Service", version="1.0.0")
@@ -49,6 +50,12 @@ def ready():
 @app.get("/metrics")
 def metrics():
     return PlainTextResponse(generate_latest().decode("utf-8"), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.websocket("/ws/kws")
+async def ws_kws(websocket: WebSocket):
+    """Поток: первое сообщение — JSON config (sample_rate обязателен), далее binary float32 mono PCM."""
+    await handle_kws_ws(websocket, service)
 
 
 @app.post("/predict", response_model=PredictResponse)

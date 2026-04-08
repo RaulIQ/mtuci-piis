@@ -4,30 +4,22 @@ from pathlib import Path
 import librosa
 import numpy as np
 import torch
-from models.small_kws_cnn import SmallKwsCNN
+
+from models.resnet_kws import ResNetKWS
 
 
 SR = 16000
-N_MELS = 64
-N_FFT = 512
-HOP_LENGTH = 160
 
 
-def extract_logmel(audio: np.ndarray, sr: int = SR) -> np.ndarray:
+def to_model_waveform(y: np.ndarray, sr: int) -> np.ndarray:
+    y = np.asarray(y, dtype=np.float32).reshape(-1)
     if sr != SR:
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=SR)
-        sr = SR
-    if len(audio) < sr:
-        audio = np.pad(audio, (0, sr - len(audio)))
-    elif len(audio) > sr:
-        audio = audio[:sr]
-
-    mel = librosa.feature.melspectrogram(
-        y=audio, sr=sr, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS, power=2.0
-    )
-    logmel = librosa.power_to_db(mel, ref=np.max)
-    logmel = (logmel - logmel.mean()) / (logmel.std() + 1e-6)
-    return logmel.astype(np.float32)
+        y = librosa.resample(y, orig_sr=sr, target_sr=SR)
+    if len(y) < SR:
+        y = np.pad(y, (0, SR - len(y)))
+    elif len(y) > SR:
+        y = y[:SR]
+    return y
 
 
 def prepare_audio(y: np.ndarray, silence_peak: float = 0.02, silence_rms: float = 0.006):
@@ -53,21 +45,30 @@ class KwsInferenceService:
         path = Path(model_path)
         if path.is_file():
             return path
-        # Preferred artifact for inference
-        fallback = Path("artifacts/colab_kws_cnn.pt")
-        if fallback.is_file():
-            return fallback
-        # Legacy fallback
-        legacy = Path("artifacts/kws_cnn.pt")
-        if legacy.is_file():
-            return legacy
-        raise FileNotFoundError(f"Model file not found: {model_path}")
+        for cand in (Path("artifacts/kws_resnet.pt"), Path("artifacts/colab_kws_resnet.pt")):
+            if cand.is_file():
+                return cand
+        raise FileNotFoundError(
+            f"Model file not found: {model_path}. "
+            "Train and save ResNet to artifacts/kws_resnet.pt or set MODEL_PATH."
+        )
 
     def _load_checkpoint(self, path: Path):
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         labels = list(checkpoint["labels"])
-        model = SmallKwsCNN(num_classes=len(labels)).to(self.device)
-        model.load_state_dict(checkpoint["state_dict"])
+        n_mels = int(checkpoint.get("n_mels", 128))
+        n_fft = int(checkpoint.get("n_fft", 512))
+        hop_length = int(checkpoint.get("hop_length", 160))
+        sample_rate = int(checkpoint.get("sample_rate", SR))
+
+        model = ResNetKWS(
+            num_classes=len(labels),
+            sample_rate=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            n_mels=n_mels,
+        ).to(self.device)
+        model.load_state_dict(checkpoint["state_dict"], strict=False)
         model.eval()
         return model, labels
 
@@ -82,8 +83,8 @@ class KwsInferenceService:
                 "inference_ms": 0.0,
             }
 
-        feature = extract_logmel(prepared, sr=sr)
-        x = torch.from_numpy(feature).unsqueeze(0).unsqueeze(0).to(self.device)
+        wave = to_model_waveform(prepared, sr=sr)
+        x = torch.from_numpy(wave).unsqueeze(0).to(self.device)
 
         start = time.perf_counter()
         with torch.no_grad():
@@ -109,4 +110,3 @@ class KwsInferenceService:
                 break
             out.append({label: float(score)})
         return out
-

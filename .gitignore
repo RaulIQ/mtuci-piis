@@ -12,4 +12,5 @@ data/
 # Всё в artifacts кроме чекпоинта CNN (нужен для демо / воспроизводимости)
 artifacts/*
 !artifacts/kws_cnn.pt
+!artifacts/kws_resnet.pt
 *.joblib

@@ -7,10 +7,11 @@ soundfile
 joblib
 torchaudio
 torch
+torchvision
 tqdm
 sounddevice
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 prometheus-client
 streamlit
