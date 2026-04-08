@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kws-service")
 
-MODEL_PATH = os.getenv("MODEL_PATH", "artifacts/kwc_cnn.pt")
+MODEL_PATH = os.getenv("MODEL_PATH", "artifacts/colab_kws_cnn.pt")
 DB_PATH = os.getenv("DB_PATH", "storage/requests.db")
 
 app = FastAPI(title="KWS Inference Service", version="1.0.0")

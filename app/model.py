@@ -4,38 +4,13 @@ from pathlib import Path
 import librosa
 import numpy as np
 import torch
-import torch.nn as nn
+from models.small_kws_cnn import SmallKwsCNN
 
 
 SR = 16000
 N_MELS = 64
 N_FFT = 512
 HOP_LENGTH = 160
-
-
-class SmallKwsCNN(nn.Module):
-    def __init__(self, num_classes: int):
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
-        self.classifier = nn.Linear(64, num_classes)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.features(x)
-        x = x.flatten(1)
-        return self.classifier(x)
 
 
 def extract_logmel(audio: np.ndarray, sr: int = SR) -> np.ndarray:
@@ -78,10 +53,14 @@ class KwsInferenceService:
         path = Path(model_path)
         if path.is_file():
             return path
-        # user mentioned kwc_cnn.pt, but artifact in repo can be kws_cnn.pt
-        fallback = Path("artifacts/kws_cnn.pt")
+        # Preferred artifact for inference
+        fallback = Path("artifacts/colab_kws_cnn.pt")
         if fallback.is_file():
             return fallback
+        # Legacy fallback
+        legacy = Path("artifacts/kws_cnn.pt")
+        if legacy.is_file():
+            return legacy
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
     def _load_checkpoint(self, path: Path):

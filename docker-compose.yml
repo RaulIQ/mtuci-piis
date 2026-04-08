@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile.inference
     container_name: kws-inference
     environment:
-      MODEL_PATH: artifacts/kwc_cnn.pt
+      MODEL_PATH: artifacts/colab_kws_cnn.pt
       DB_PATH: /data/requests.db
     volumes:
       - inference_data:/data

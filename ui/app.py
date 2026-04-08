@@ -8,11 +8,31 @@ st.set_page_config(page_title="KWS Demo", layout="centered")
 st.title("KWS Inference UI")
 st.caption("Upload WAV and run single-shot or streaming-like KWS inference.")
 
-api_url = os.getenv("API_URL", "http://inference:8000")
+api_url = os.getenv("API_URL", "http://localhost:8000")
 st.write(f"API endpoint: `{api_url}`")
 
+st.markdown("### Audio source")
 uploaded = st.file_uploader("Upload .wav", type=["wav"])
-if uploaded is not None:
+recorded = st.audio_input("Or record audio from microphone")
+
+audio_bytes = None
+audio_name = "recorded.wav"
+
+if recorded is not None:
+    audio_bytes = recorded.getvalue()
+    audio_name = "recorded.wav"
+    st.audio(audio_bytes, format="audio/wav")
+    st.download_button(
+        "Download recorded WAV",
+        data=audio_bytes,
+        file_name=audio_name,
+        mime="audio/wav",
+    )
+elif uploaded is not None:
+    audio_bytes = uploaded.getvalue()
+    audio_name = uploaded.name
+
+if audio_bytes is not None:
     mode = st.radio(
         "Mode",
         ["Single prediction", "Sliding window stream simulation"],
@@ -22,7 +42,7 @@ if uploaded is not None:
     if mode == "Single prediction":
         if st.button("Predict"):
             try:
-                files = {"file": (uploaded.name, uploaded.getvalue(), "audio/wav")}
+                files = {"file": (audio_name, audio_bytes, "audio/wav")}
                 response = requests.post(f"{api_url}/predict", files=files, timeout=30)
                 if response.ok:
                     data = response.json()
@@ -46,7 +66,7 @@ if uploaded is not None:
 
         if st.button("Run stream simulation"):
             try:
-                files = {"file": (uploaded.name, uploaded.getvalue(), "audio/wav")}
+                files = {"file": (audio_name, audio_bytes, "audio/wav")}
                 data = {
                     "stride_sec": str(stride_sec),
                     "refractory_sec": str(refractory_sec),
