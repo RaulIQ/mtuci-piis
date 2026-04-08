@@ -3,6 +3,8 @@
 ## Project Overview
 Simple Keyword Spotting inference service based on Lab 3 model.
 
+**Target deployment (ESP32):** In the intended setup, audio is captured on an **ESP32** and sent to the API—not from the browser. **Preprocessing** (e.g. feature extraction) can run **either on the ESP32 or on the server**, depending on the hybrid vs cloud-only mode. **Neural network inference** runs **on the server** (this service). The Streamlit UI and browser/curl examples are for development and demos.
+
 Core components:
 - Inference API (`FastAPI`)
 - Web UI (`Streamlit`)
