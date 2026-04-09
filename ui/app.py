@@ -18,5 +18,10 @@ realtime = st.Page(
     title="Realtime KWS",
     icon="🎙️",
 )
+realtime_edge = st.Page(
+    "pages/realtime_kws_edge.py",
+    title="Realtime KWS · log-mel",
+    icon="📡",
+)
 
-st.navigation([server_inference, edge_inference, realtime]).run()
+st.navigation([server_inference, edge_inference, realtime, realtime_edge]).run()
