@@ -2,16 +2,16 @@ import streamlit as st
 
 st.set_page_config(page_title="KWS", layout="centered")
 
-demo = st.Page(
-    "pages/kws_demo.py",
-    title="KWS Demo",
-    icon="📊",
+server_inference = st.Page(
+    "pages/kws_inference_server.py",
+    title="KWS · server (WAV)",
+    icon="🖥️",
     default=True,
 )
-record = st.Page(
-    "pages/kws_record.py",
-    title="KWS Record",
-    icon="🎤",
+edge_inference = st.Page(
+    "pages/kws_inference_edge.py",
+    title="KWS · edge (log-mel)",
+    icon="⚡",
 )
 realtime = st.Page(
     "pages/realtime_kws.py",
@@ -19,4 +19,4 @@ realtime = st.Page(
     icon="🎙️",
 )
 
-st.navigation([demo, record, realtime]).run()
+st.navigation([server_inference, edge_inference, realtime]).run()
