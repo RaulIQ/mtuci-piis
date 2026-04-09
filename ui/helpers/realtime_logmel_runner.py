@@ -10,6 +10,8 @@ import time
 from collections.abc import Callable
 
 import numpy as np
+
+from helpers.ws_traffic import WsTrafficCounter
 import sounddevice as sd
 import websockets
 
@@ -29,6 +31,7 @@ async def run_realtime_logmel_async(
     blocksize: int,
     stop_event: threading.Event,
     on_message: Callable[[dict], None],
+    traffic: WsTrafficCounter | None = None,
 ) -> None:
     """
     Capture 16 kHz mono, send NPZ packets until ``stop_event`` is set.
@@ -65,7 +68,10 @@ async def run_realtime_logmel_async(
     stream.start()
     try:
         async with websockets.connect(ws_url, max_size=None) as ws:
-            await ws.send(json.dumps(ws_payload))
+            payload_text = json.dumps(ws_payload)
+            await ws.send(payload_text)
+            if traffic is not None:
+                traffic.add_up(len(payload_text.encode("utf-8")))
             first = await ws.recv()
             if isinstance(first, bytes):
                 raise RuntimeError("expected JSON hello, got binary")
@@ -73,8 +79,10 @@ async def run_realtime_logmel_async(
             if hello.get("type") != "ready":
                 raise RuntimeError(f"expected ready, got: {hello}")
             on_message(hello)
+            if traffic is not None and isinstance(first, str):
+                traffic.add_down(len(first.encode("utf-8")))
 
-            recv_task = asyncio.create_task(_forward_ws_messages(ws, on_message))
+            recv_task = asyncio.create_task(_forward_ws_messages(ws, on_message, traffic))
 
             buf = np.array([], dtype=np.float32)
             stream_start: float | None = None
@@ -125,6 +133,8 @@ async def run_realtime_logmel_async(
                         continue
 
                     await ws.send(npz_bytes)
+                    if traffic is not None:
+                        traffic.add_up(len(npz_bytes))
             finally:
                 recv_task.cancel()
                 try:
@@ -139,12 +149,18 @@ async def run_realtime_logmel_async(
     on_message({"type": "runner_stopped"})
 
 
-async def _forward_ws_messages(ws, on_message: Callable[[dict], None]) -> None:
+async def _forward_ws_messages(
+    ws,
+    on_message: Callable[[dict], None],
+    traffic: WsTrafficCounter | None,
+) -> None:
     try:
         async for raw in ws:
             if isinstance(raw, bytes):
                 on_message({"type": "runner_error", "message": "unexpected binary from server"})
                 continue
+            if traffic is not None:
+                traffic.add_down(len(raw.encode("utf-8")))
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -166,6 +182,7 @@ def run_realtime_logmel_in_thread(
     blocksize: int,
     stop_event: threading.Event,
     on_message: Callable[[dict], None],
+    traffic: WsTrafficCounter | None = None,
 ) -> threading.Thread:
     """Runs ``run_realtime_logmel_async`` in a daemon thread."""
 
@@ -181,6 +198,7 @@ def run_realtime_logmel_in_thread(
                 blocksize=blocksize,
                 stop_event=stop_event,
                 on_message=on_message,
+                traffic=traffic,
             )
         )
 

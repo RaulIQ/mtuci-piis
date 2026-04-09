@@ -14,6 +14,7 @@ if str(UI_ROOT) not in sys.path:
 
 from helpers.labels import DEFAULT_TARGET_LABELS, parse_target_labels
 from helpers.realtime_logmel_runner import run_realtime_logmel_in_thread
+from helpers.ws_traffic import WsTrafficCounter, format_bytes, format_rate
 from services.api import get_api_url
 from services.urls import build_ws_kws_logmel_url
 
@@ -22,6 +23,11 @@ st.title("Realtime KWS · Python log-mel")
 st.caption(
     "Log-mel считается в процессе Streamlit (как на странице edge), на API уходят NPZ по WebSocket. "
     "Микрофон — у той машины, где запущен Streamlit (не в браузере)."
+)
+st.caption(
+    "**Нагрузка на сеть (оценка на клиенте):** ниже в потоке — байты полезной нагрузки WS (JSON конфиг + сжатые NPZ "
+    "и входящие JSON). TCP/WebSocket framing не считаются. При том же шаге окна upload обычно **ниже**, чем у "
+    "«Realtime KWS» с непрерывным PCM."
 )
 
 api_url = get_api_url()
@@ -36,6 +42,8 @@ if "edge_rt_bad_since" not in st.session_state:
     st.session_state.edge_rt_bad_since = None
 if "edge_rt_running" not in st.session_state:
     st.session_state.edge_rt_running = False
+if "_edge_traffic_prev" not in st.session_state:
+    st.session_state._edge_traffic_prev = None
 
 DIGIT_MAP = {
     "one": "1",
@@ -158,12 +166,15 @@ with c3:
 if start and not st.session_state.edge_rt_running:
     st.session_state.edge_rt_q = queue.Queue()
     st.session_state.edge_rt_stop = threading.Event()
+    st.session_state.edge_rt_traffic = WsTrafficCounter()
+    st.session_state._edge_traffic_prev = None
     st.session_state.edge_rt_lines.clear()
     st.session_state.edge_rt_center = None
     st.session_state.edge_rt_bad_since = None
 
     q: queue.Queue = st.session_state.edge_rt_q
     stop_ev: threading.Event = st.session_state.edge_rt_stop
+    traf: WsTrafficCounter = st.session_state.edge_rt_traffic
 
     st.session_state.edge_rt_thread = run_realtime_logmel_in_thread(
         api_url=api_url,
@@ -175,6 +186,7 @@ if start and not st.session_state.edge_rt_running:
         blocksize=blocksize,
         stop_event=stop_ev,
         on_message=q.put,
+        traffic=traf,
     )
     st.session_state.edge_rt_running = True
 
@@ -192,6 +204,31 @@ def _render_live_panel() -> None:
     if not isinstance(tset, set):
         tset = set(tset)
     _drain_queue_and_update(conf_thr, tset)
+
+    tc = st.session_state.get("edge_rt_traffic")
+    if tc is not None and isinstance(tc, WsTrafficCounter):
+        up, down = tc.snapshot()
+        now = time.monotonic()
+        prev = st.session_state._edge_traffic_prev
+        rate_up = 0.0
+        rate_down = 0.0
+        if prev is not None:
+            pu, pd, pt = prev
+            dt = now - pt
+            if dt > 1e-6:
+                rate_up = max(0.0, (up - pu) / dt)
+                rate_down = max(0.0, (down - pd) / dt)
+        st.session_state._edge_traffic_prev = (up, down, now)
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Отправлено (WS)", format_bytes(up))
+        with m2:
+            st.metric("Принято (WS)", format_bytes(down))
+        with m3:
+            st.metric("Скорость ↑", format_rate(rate_up))
+        with m4:
+            st.metric("Скорость ↓", format_rate(rate_down))
+
     center = st.session_state.edge_rt_center
     if center is not None:
         safe = html.escape(str(center))
