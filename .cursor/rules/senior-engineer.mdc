@@ -24,7 +24,26 @@ alwaysApply: true
 - Handle edge cases explicitly where they matter.
 - Write maintainable, scalable code.
 
-## Do not
+## Comments:
 
-- Write unnecessary comments.
+- Write comments only when necessary
+- Do not explain obvious code
+- Prefer self-documenting code over comments
+
+Function comments:
+- Add comments only for non-trivial or business-critical functions
+- Explain the purpose (why the function exists)
+- Describe inputs and outputs when not obvious
+- Mention important side effects if any
+
+Style:
+- Keep comments short and precise
+- Use plain English
+- Avoid repeating the function name or code
+
+Do not:
+- Comment simple or self-explanatory functions
+- Write redundant or noisy comments
+
+## Do not
 - Overengineer solutions.

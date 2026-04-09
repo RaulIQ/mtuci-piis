@@ -1,0 +1,60 @@
+import base64
+import time
+
+from fastapi import APIRouter, Depends, File, UploadFile
+
+from app.dependencies import AppDependencies, get_deps
+from app.routers.predict_support import predict_route_guard, predict_route_guard_async
+from app.schemas import PredictAudioRequest, PredictResponse
+from app.use_cases.predict_from_bytes import run_predict_from_audio_bytes
+
+router = APIRouter(tags=["predict"])
+
+
+@router.post("/predict", response_model=PredictResponse)
+async def predict(
+    file: UploadFile = File(...),
+    deps: AppDependencies = Depends(get_deps),
+):
+    endpoint = "/predict"
+    started = time.perf_counter()
+
+    async def _run() -> PredictResponse:
+        content = await file.read()
+        return run_predict_from_audio_bytes(
+            service=deps.service,
+            store=deps.store,
+            raw_bytes=content,
+            filename=file.filename,
+            endpoint=endpoint,
+            started_perf=started,
+            logger=deps.logger,
+            empty_detail="Empty file",
+        )
+
+    return await predict_route_guard_async(endpoint, deps, "predict_failed", _run)
+
+
+@router.post("/predict-base64", response_model=PredictResponse)
+def predict_base64(
+    payload: PredictAudioRequest,
+    deps: AppDependencies = Depends(get_deps),
+):
+    endpoint = "/predict-base64"
+    started = time.perf_counter()
+
+    def _run() -> PredictResponse:
+        content = base64.b64decode(payload.audio_base64)
+        return run_predict_from_audio_bytes(
+            service=deps.service,
+            store=deps.store,
+            raw_bytes=content,
+            filename="base64_payload.wav",
+            endpoint=endpoint,
+            started_perf=started,
+            logger=deps.logger,
+            empty_detail="Empty payload",
+            log_success=False,
+        )
+
+    return predict_route_guard(endpoint, deps, "predict_base64_failed", _run)
