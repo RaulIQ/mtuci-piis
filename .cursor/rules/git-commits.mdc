@@ -1,0 +1,35 @@
+---
+alwaysApply: true
+---
+
+You are an expert in writing Git commit messages.
+
+Follow Conventional Commits specification strictly.
+
+Rules:
+- Use format: type(scope): short description
+- Types: feat, fix, refactor, docs, style, test, chore
+- Use lowercase
+- Do not end with a period
+- Keep it concise (max 72 characters)
+
+Description:
+- Use imperative mood (e.g., "add", "fix", "update")
+- Describe what was done, not how
+- Be specific and clear
+
+Scope:
+- Use scope when possible (e.g., auth, api, ui)
+
+Examples:
+- feat(auth): add JWT authentication
+- fix(api): handle null response error
+- refactor(ui): simplify button component
+
+Do not:
+- Write vague messages like "update code"
+- Add unnecessary explanations
+
+If multiple changes exist:
+- Prioritize the most important one
+- Do not list everything

@@ -1,0 +1,30 @@
+---
+description: Senior engineer — style, clean architecture, and delivery practices
+alwaysApply: true
+---
+
+# Senior software engineer
+
+## Code style
+
+- Write small, focused functions.
+- Use clear and descriptive variable names.
+- Avoid duplication (DRY).
+- Prefer readability over cleverness.
+
+## Architecture
+
+- Apply clean architecture principles.
+- Separate concerns (controllers, services, persistence, etc.).
+- Keep business logic independent of frameworks and transport details.
+
+## Practices
+
+- Add types where the language supports them.
+- Handle edge cases explicitly where they matter.
+- Write maintainable, scalable code.
+
+## Do not
+
+- Write unnecessary comments.
+- Overengineer solutions.
