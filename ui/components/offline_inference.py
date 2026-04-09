@@ -1,3 +1,5 @@
+from typing import Literal
+
 import streamlit as st
 
 from helpers.labels import DEFAULT_TARGET_LABELS
@@ -53,18 +55,23 @@ def render_offline_inference(
     detections_header: str | None = None,
     window_predictions_header: str | None = None,
     widget_key_prefix: str = "",
+    forced_mode: Literal["predict", "stream"] | None = None,
 ) -> None:
     if audio_bytes is None:
         return
 
-    mode = st.radio(
-        mode_label,
-        mode_options,
-        index=0,
-        key=f"{widget_key_prefix}mode",
-    )
+    if forced_mode is None:
+        mode = st.radio(
+            mode_label,
+            mode_options,
+            index=0,
+            key=f"{widget_key_prefix}mode",
+        )
+        use_predict = mode == mode_options[0]
+    else:
+        use_predict = forced_mode == "predict"
 
-    if mode == mode_options[0]:
+    if use_predict:
         if st.button(predict_button_label, key=f"{widget_key_prefix}predict_button"):
             try:
                 response = predict_audio(api_url, audio_name, audio_bytes)
