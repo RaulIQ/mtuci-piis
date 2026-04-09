@@ -8,10 +8,15 @@ demo = st.Page(
     icon="📊",
     default=True,
 )
+record = st.Page(
+    "pages/kws_record.py",
+    title="KWS Record",
+    icon="🎤",
+)
 realtime = st.Page(
     "pages/realtime_kws.py",
     title="Realtime KWS",
     icon="🎙️",
 )
 
-st.navigation([demo, realtime]).run()
+st.navigation([demo, record, realtime]).run()
