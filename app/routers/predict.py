@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.dependencies import AppDependencies, get_deps
-from app.routers.predict_support import predict_route_guard, predict_route_guard_async
+from app.routers.route_errors import run_route_guard
 from app.schemas import PredictAudioRequest, PredictResponse
 from app.use_cases.predict_from_bytes import run_predict_from_audio_bytes
 
@@ -32,11 +32,11 @@ async def predict(
             empty_detail="Empty file",
         )
 
-    return await predict_route_guard_async(endpoint, deps, "predict_failed", _run)
+    return await run_route_guard(endpoint, deps, "predict_failed", _run)
 
 
 @router.post("/predict-base64", response_model=PredictResponse)
-def predict_base64(
+async def predict_base64(
     payload: PredictAudioRequest,
     deps: AppDependencies = Depends(get_deps),
 ):
@@ -57,4 +57,4 @@ def predict_base64(
             log_success=False,
         )
 
-    return predict_route_guard(endpoint, deps, "predict_base64_failed", _run)
+    return await run_route_guard(endpoint, deps, "predict_base64_failed", _run)

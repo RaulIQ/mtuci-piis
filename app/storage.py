@@ -26,7 +26,6 @@ class RequestLogStore:
                 )
                 """
             )
-            conn.commit()
 
     def write(
         self,
@@ -53,5 +52,4 @@ class RequestLogStore:
                     model_version,
                 ),
             )
-            conn.commit()
 

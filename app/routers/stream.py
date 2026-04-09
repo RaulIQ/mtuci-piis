@@ -1,9 +1,10 @@
 import time
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.dependencies import AppDependencies, get_deps
-from app.monitoring import REQUESTS_TOTAL
+from app.label_parsing import parse_comma_separated_labels
+from app.routers.route_errors import run_route_guard
 from app.schemas import StreamPredictResponse
 from app.streaming import StreamParams
 from app.use_cases.stream_from_bytes import run_stream_from_bytes
@@ -22,14 +23,14 @@ async def predict_stream(
 ):
     endpoint = "/predict-stream"
     started = time.perf_counter()
-    try:
+
+    async def _run() -> StreamPredictResponse:
         content = await file.read()
-        labels_set = {x.strip() for x in target_labels.split(",") if x.strip()}
         params = StreamParams(
             stride_sec=stride_sec,
             refractory_sec=refractory_sec,
             confidence_threshold=confidence_threshold,
-            target_labels=labels_set,
+            target_labels=parse_comma_separated_labels(target_labels),
         )
         return run_stream_from_bytes(
             streaming=deps.streaming,
@@ -40,13 +41,5 @@ async def predict_stream(
             params=params,
             logger=deps.logger,
         )
-    except ValueError as exc:
-        REQUESTS_TOTAL.labels(endpoint=endpoint, status="bad_request").inc()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except HTTPException:
-        REQUESTS_TOTAL.labels(endpoint=endpoint, status="bad_request").inc()
-        raise
-    except Exception as exc:  # pylint: disable=broad-except
-        REQUESTS_TOTAL.labels(endpoint=endpoint, status="error").inc()
-        deps.logger.exception("predict_stream_failed error=%s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return await run_route_guard(endpoint, deps, "predict_stream_failed", _run)

@@ -1,12 +1,9 @@
-import io
 import logging
-import time
 from datetime import datetime, timezone
 
-import librosa
-
+from app.audio_bytes import load_mono_from_bytes
 from app.model import KwsInferenceService
-from app.monitoring import INFERENCE_LATENCY_MS, REQUEST_LATENCY_MS, REQUESTS_TOTAL
+from app.monitoring import INFERENCE_LATENCY_MS, observe_request_success_ms
 from app.schemas import PredictResponse
 from app.storage import RequestLogStore
 
@@ -23,16 +20,11 @@ def run_predict_from_audio_bytes(
     empty_detail: str,
     log_success: bool = True,
 ) -> PredictResponse:
-    if not raw_bytes:
-        raise ValueError(empty_detail)
-
-    audio, sr = librosa.load(io.BytesIO(raw_bytes), sr=None, mono=True)
+    audio, sr = load_mono_from_bytes(raw_bytes, empty_detail=empty_detail)
     pred = service.predict(audio, sr=sr)
 
-    latency_ms = (time.perf_counter() - started_perf) * 1000
-    REQUEST_LATENCY_MS.labels(endpoint=endpoint).observe(latency_ms)
+    latency_ms = observe_request_success_ms(endpoint, started_perf)
     INFERENCE_LATENCY_MS.observe(pred["inference_ms"])
-    REQUESTS_TOTAL.labels(endpoint=endpoint, status="ok").inc()
 
     now = datetime.now(timezone.utc).isoformat()
     store.write(
