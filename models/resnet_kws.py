@@ -36,3 +36,10 @@ class ResNetKWS(nn.Module):
         std = log_mels.std(dim=(1, 2, 3), keepdim=True)
         log_mels = (log_mels - mean) / (std + 1e-6)
         return self.backbone(log_mels)
+
+    def forward_log_mels(self, log_mels: torch.Tensor) -> torch.Tensor:
+        # log_mels: [B, 1, n_mels, frames], precomputed on edge
+        mean = log_mels.mean(dim=(1, 2, 3), keepdim=True)
+        std = log_mels.std(dim=(1, 2, 3), keepdim=True)
+        norm_log_mels = (log_mels - mean) / (std + 1e-6)
+        return self.backbone(norm_log_mels)

@@ -12,7 +12,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.model import KwsInferenceService
 from app.monitoring import INFERENCE_LATENCY_MS, REQUEST_LATENCY_MS, REQUESTS_TOTAL
-from app.schemas import PredictAudioRequest, PredictResponse, StreamPredictResponse
+from app.schemas import (
+    PredictAudioRequest,
+    PredictResponse,
+    PredictSpectrogramRequest,
+    StreamPredictResponse,
+)
 from app.storage import RequestLogStore
 from app.streaming import SlidingWindowProcessor, StreamParams
 from app.ws_kws import handle_kws_ws
@@ -44,6 +49,13 @@ def ready():
         "status": "ready",
         "model_version": service.model_version,
         "labels": service.labels,
+        "spec": {
+            "sample_rate": service.sample_rate,
+            "n_fft": service.n_fft,
+            "hop_length": service.hop_length,
+            "n_mels": service.n_mels,
+            "frames": service.spec_frames,
+        },
     }
 
 
@@ -145,6 +157,35 @@ def predict_base64(payload: PredictAudioRequest):
     except Exception as exc:  # pylint: disable=broad-except
         REQUESTS_TOTAL.labels(endpoint="/predict-base64", status="error").inc()
         logger.exception("predict_base64_failed error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/predict-spectrogram", response_model=PredictResponse)
+def predict_spectrogram(payload: PredictSpectrogramRequest):
+    started = time.perf_counter()
+    try:
+        if not payload.log_mels:
+            raise HTTPException(status_code=400, detail="Empty log_mels")
+        pred = service.predict_log_mels(payload.log_mels)
+
+        latency_ms = (time.perf_counter() - started) * 1000
+        REQUEST_LATENCY_MS.labels(endpoint="/predict-spectrogram").observe(latency_ms)
+        INFERENCE_LATENCY_MS.observe(pred["inference_ms"])
+        REQUESTS_TOTAL.labels(endpoint="/predict-spectrogram", status="ok").inc()
+
+        return PredictResponse(
+            predicted_class=pred["predicted_class"],
+            confidence=pred["confidence"],
+            latency_ms=latency_ms,
+            model_version=service.model_version,
+            top_k=pred["top_k"],
+        )
+    except HTTPException:
+        REQUESTS_TOTAL.labels(endpoint="/predict-spectrogram", status="bad_request").inc()
+        raise
+    except Exception as exc:  # pylint: disable=broad-except
+        REQUESTS_TOTAL.labels(endpoint="/predict-spectrogram", status="error").inc()
+        logger.exception("predict_spectrogram_failed error=%s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

@@ -5,6 +5,10 @@ class PredictAudioRequest(BaseModel):
     audio_base64: str
 
 
+class PredictSpectrogramRequest(BaseModel):
+    log_mels: list[list[float]]
+
+
 class PredictResponse(BaseModel):
     predicted_class: str
     confidence: float

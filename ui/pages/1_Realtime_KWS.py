@@ -1,10 +1,30 @@
 import json
+import io
 import os
+import sys
+import threading
+import time
 import urllib.parse
+from collections import deque
+from pathlib import Path
 
+import av
+import librosa
+import numpy as np
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from ui.services.kws_model import build_mel_transform, compute_canonical_log_mels
+from ui.services.kws_transport import (
+    audio_frame_to_mono_float32,
+    render_center,
+    run_realtime_bridge,
+)
 
 st.set_page_config(page_title="Realtime KWS", layout="centered")
 st.title("Realtime KWS")
@@ -30,6 +50,12 @@ with col_a:
     confidence_threshold = st.slider("Confidence threshold", 0.10, 0.99, 0.55, 0.01)
 with col_b:
     refractory_sec = st.slider("Refractory (sec)", 0.2, 2.0, 0.8, 0.1)
+    ws_input_type_human = st.radio(
+        "Формат потока в WS",
+        ["PCM float32", "log-mel спектрограммы"],
+        index=0,
+        help="Во втором режиме браузер шлёт PCM в UI backend, а UI backend считает каноничные log-mel и отправляет их в API.",
+    )
     target_labels_raw = st.text_input(
         "Target labels (comma-separated)",
         value="one,two,three,four,five,six,seven,eight,nine",
@@ -37,24 +63,30 @@ with col_b:
 
 target_labels = [x.strip() for x in target_labels_raw.split(",") if x.strip()]
 
+ws_input_type = "log_mel" if ws_input_type_human == "log-mel спектрограммы" else "audio"
 ws_config = {
     "poll_interval_sec": poll_interval_sec,
     "confidence_threshold": confidence_threshold,
     "refractory_sec": refractory_sec,
     "target_labels": target_labels,
+    "input_type": ws_input_type,
 }
 
-st.markdown("### Поток с микрофона (WebSocket)")
-st.caption(
-    "Нажмите «Старт» в блоке ниже, разрешите микрофон. "
-    "Аудио уходит на сервер; ответы — в реальном времени. "
-    "Нужен запущенный API (uvicorn) на том же хосте, что в REST URL."
-)
-
-_ws_cfg_json = json.dumps(ws_config)
-_ws_url_json = json.dumps(ws_url)
-
-html = f"""
+st.markdown("### Поток с микрофона")
+if ws_input_type == "audio":
+    st.caption(
+        "Режим PCM: браузер отправляет float32 PCM напрямую в API по WebSocket, как в исходной реализации."
+    )
+    _ws_cfg_json = json.dumps(
+        {
+            "poll_interval_sec": poll_interval_sec,
+            "confidence_threshold": confidence_threshold,
+            "refractory_sec": refractory_sec,
+            "target_labels": target_labels,
+        }
+    )
+    _ws_url_json = json.dumps(ws_url)
+    html = f"""
 <div id="kws-ws-ui" style="font-family:sans-serif;max-width:560px;margin:0 auto;">
   <p>
     <button id="kwsStart" type="button" style="padding:8px 16px;margin-right:8px;">Старт</button>
@@ -263,8 +295,92 @@ html = f"""
 }})();
 </script>
 """
+    st.components.v1.html(html, height=420, scrolling=False)
+else:
+    st.caption(
+        "Режим log-mel: браузер шлёт PCM в UI backend через WebRTC без DSP-улучшателей; "
+        "UI backend повторяет серверную логику формирования log-mel и отправляет в API уже спектрограммы."
+    )
 
-components.html(html, height=420, scrolling=False)
+    status_placeholder = st.empty()
+    traffic_placeholder = st.empty()
+    center_placeholder = st.empty()
+    log_placeholder = st.empty()
+    render_center(center_placeholder, None)
+    traffic_placeholder.info("UI <-> API: tx 0 B, rx 0 B, up 0.0 kbps, down 0.0 kbps")
+
+    ready_resp = requests.get(f"{api_url}/ready", timeout=10)
+    if not ready_resp.ok:
+        status_placeholder.error(f"/ready ошибка: {ready_resp.status_code}")
+        st.code(ready_resp.text)
+    else:
+        spec_cfg = ready_resp.json().get("spec", {})
+        model_sr = int(spec_cfg.get("sample_rate", 16000))
+        n_fft = int(spec_cfg.get("n_fft", 512))
+        hop_length = int(spec_cfg.get("hop_length", 160))
+        n_mels = int(spec_cfg.get("n_mels", 128))
+        frames = int(spec_cfg.get("frames", 101))
+        mel_tf = build_mel_transform(model_sr, n_fft, hop_length, n_mels)
+
+        audio_lock = threading.Lock()
+        audio_chunks: deque[np.ndarray] = deque()
+        audio_meta = {"sample_rate": None}
+
+        def _audio_frame_callback(frame: av.AudioFrame) -> av.AudioFrame:
+            mono = audio_frame_to_mono_float32(frame)
+            with audio_lock:
+                audio_chunks.append(mono)
+                audio_meta["sample_rate"] = int(frame.sample_rate)
+            return frame
+
+        webrtc_ctx = webrtc_streamer(
+            key="kws-edge-bridge",
+            mode=WebRtcMode.SENDONLY,
+            media_stream_constraints={
+                "video": False,
+                "audio": {
+                    "echoCancellation": False,
+                    "noiseSuppression": False,
+                    "autoGainControl": False,
+                    "channelCount": 1,
+                },
+            },
+            audio_frame_callback=_audio_frame_callback,
+            async_processing=True,
+        )
+
+        if webrtc_ctx.state.playing:
+            status_placeholder.info("Жду первые аудио-фреймы от браузера...")
+
+            while webrtc_ctx.state.playing and audio_meta["sample_rate"] is None:
+                time.sleep(0.05)
+
+            try:
+                run_realtime_bridge(
+                    webrtc_ctx=webrtc_ctx,
+                    audio_lock=audio_lock,
+                    audio_chunks=audio_chunks,
+                    audio_meta=audio_meta,
+                    ws_url=ws_url,
+                    ws_input_type=ws_input_type,
+                    ws_config=ws_config,
+                    model_sr=model_sr,
+                    poll_interval_sec=poll_interval_sec,
+                    confidence_threshold=confidence_threshold,
+                    target_labels=target_labels,
+                    mel_tf=mel_tf,
+                    frames=frames,
+                    status_placeholder=status_placeholder,
+                    traffic_placeholder=traffic_placeholder,
+                    center_placeholder=center_placeholder,
+                    log_placeholder=log_placeholder,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                status_placeholder.error(f"Ошибка realtime bridge: {exc}")
+                log_placeholder.code(f"bridge error {exc}")
+        else:
+            status_placeholder.info("Нажмите Start в WebRTC-блоке ниже.")
+            log_placeholder.code("Ожидание запуска микрофона...")
 
 st.markdown("---")
 st.markdown("### Запись файлом (как раньше)")
@@ -313,27 +429,34 @@ if audio_bytes is not None:
             value="one,two,three,four,five,six,seven,eight,nine",
             key="off_targets",
         )
+        stream_input_mode = st.radio(
+            "Что отправлять на API",
+            ["Сырые аудио-чанки (как сейчас)", "Секундные log-mel спектрограммы (edge)"],
+            index=0,
+            key="off_stream_input_mode",
+        )
         target_set = {x.strip() for x in targets_off.split(",") if x.strip()}
 
         if st.button("Запустить predict-stream"):
             try:
-                files = {"file": (audio_name, audio_bytes, "audio/wav")}
-                data = {
-                    "stride_sec": str(stride_sec),
-                    "refractory_sec": str(refractory_off),
-                    "confidence_threshold": str(confidence_off),
-                    "target_labels": ",".join(sorted(target_set)),
-                }
-                response = requests.post(
-                    f"{api_url}/predict-stream",
-                    files=files,
-                    data=data,
-                    timeout=60,
-                )
-                if not response.ok:
-                    st.error(f"Ошибка: {response.status_code}")
-                    st.code(response.text)
-                else:
+                if stream_input_mode == "Сырые аудио-чанки (как сейчас)":
+                    files = {"file": (audio_name, audio_bytes, "audio/wav")}
+                    data = {
+                        "stride_sec": str(stride_sec),
+                        "refractory_sec": str(refractory_off),
+                        "confidence_threshold": str(confidence_off),
+                        "target_labels": ",".join(sorted(target_set)),
+                    }
+                    response = requests.post(
+                        f"{api_url}/predict-stream",
+                        files=files,
+                        data=data,
+                        timeout=60,
+                    )
+                    if not response.ok:
+                        st.error(f"Ошибка: {response.status_code}")
+                        st.code(response.text)
+                        st.stop()
                     payload = response.json()
                     detections = payload.get("detections", [])
                     rows = payload.get("window_predictions", [])
@@ -349,5 +472,124 @@ if audio_bytes is not None:
 
                     st.markdown("### По окнам")
                     st.dataframe(rows, use_container_width=True, height=350)
+                else:
+                    ready_resp = requests.get(f"{api_url}/ready", timeout=10)
+                    if not ready_resp.ok:
+                        st.error(f"/ready ошибка: {ready_resp.status_code}")
+                        st.code(ready_resp.text)
+                        st.stop()
+                    spec_cfg = ready_resp.json().get("spec", {})
+                    model_sr = int(spec_cfg.get("sample_rate", 16000))
+                    n_fft = int(spec_cfg.get("n_fft", 512))
+                    hop_length = int(spec_cfg.get("hop_length", 160))
+                    n_mels = int(spec_cfg.get("n_mels", 128))
+                    frames = int(spec_cfg.get("frames", 101))
+                    mel_tf = build_mel_transform(model_sr, n_fft, hop_length, n_mels)
+
+                    audio, sr = librosa.load(io.BytesIO(audio_bytes), sr=None, mono=True)
+                    if sr != model_sr:
+                        audio = librosa.resample(audio, orig_sr=sr, target_sr=model_sr)
+                        sr = model_sr
+
+                    win_size = int(1.0 * sr)
+                    step = max(1, int(stride_sec * sr))
+                    starts = list(range(0, max(1, len(audio) - win_size + 1), step))
+                    if len(audio) <= win_size:
+                        starts = [0]
+
+                    windows = []
+                    detections = []
+                    refractory_until = -1.0
+                    t0 = time.perf_counter()
+                    ui_api_tx_bytes = 0
+                    ui_api_rx_bytes = 0
+
+                    for start in starts:
+                        end = start + win_size
+                        chunk = audio[start:end]
+                        if len(chunk) < win_size:
+                            chunk = np.pad(chunk, (0, win_size - len(chunk)))
+                        log_mels = compute_canonical_log_mels(
+                            chunk,
+                            sr=sr,
+                            mel_tf=mel_tf,
+                            frames=frames,
+                        )
+                        if log_mels is None:
+                            pred_label = "silence"
+                            pred_conf = 1.0
+                        else:
+                            payload = {"log_mels": log_mels.astype(np.float32).tolist()}
+                            payload_bytes = json.dumps(payload).encode("utf-8")
+                            ui_api_tx_bytes += len(payload_bytes)
+                            resp = requests.post(
+                                f"{api_url}/predict-spectrogram",
+                                data=payload_bytes,
+                                headers={"Content-Type": "application/json"},
+                                timeout=30,
+                            )
+                            ui_api_rx_bytes += len(resp.content or b"")
+                            if not resp.ok:
+                                st.error(f"/predict-spectrogram ошибка: {resp.status_code}")
+                                st.code(resp.text)
+                                st.stop()
+                            pred = resp.json()
+                            pred_label = pred["predicted_class"]
+                            pred_conf = float(pred["confidence"])
+
+                        t_sec = round(start / sr, 3)
+                        windows.append(
+                            {
+                                "t_sec": t_sec,
+                                "predicted_class": pred_label,
+                                "confidence": round(pred_conf, 4),
+                            }
+                        )
+                        is_trigger = (
+                            pred_label in target_set
+                            and pred_conf >= confidence_off
+                            and t_sec >= refractory_until
+                        )
+                        if is_trigger:
+                            detections.append(
+                                {
+                                    "t_sec": t_sec,
+                                    "label": pred_label,
+                                    "confidence": round(pred_conf, 4),
+                                }
+                            )
+                            refractory_until = t_sec + refractory_off
+
+                    elapsed_ms = (time.perf_counter() - t0) * 1000
+                    windows_processed = len(windows)
+                    payload = {
+                        "windows_processed": windows_processed,
+                        "detections_count": len(detections),
+                        "detections": detections,
+                        "window_predictions": windows,
+                    }
+                    raw_window_bytes = win_size * 4
+                    spec_window_bytes = n_mels * frames * 4
+
+                    st.success("Готово (edge-режим: отправка спектрограмм)")
+                    st.write(f"Окон: {payload.get('windows_processed', len(windows))}")
+                    st.write(f"Детекций: {payload.get('detections_count', len(detections))}")
+                    st.write(f"Суммарное время клиента (мс): {elapsed_ms:.1f}")
+                    st.markdown("### Сравнение сетевой нагрузки (float32)")
+                    st.write(f"Raw audio на окно (1с): {raw_window_bytes / 1024:.1f} KiB")
+                    st.write(f"log-mel на окно: {spec_window_bytes / 1024:.1f} KiB")
+                    st.write(f"Raw audio суммарно: {(raw_window_bytes * windows_processed) / 1024:.1f} KiB")
+                    st.write(f"log-mel суммарно: {(spec_window_bytes * windows_processed) / 1024:.1f} KiB")
+                    st.markdown("### Фактическая нагрузка UI ↔ API (edge режим)")
+                    st.write(f"UI -> API (JSON payload): {ui_api_tx_bytes / 1024:.1f} KiB")
+                    st.write(f"API -> UI (responses): {ui_api_rx_bytes / 1024:.1f} KiB")
+
+                    if detections:
+                        st.dataframe(detections, use_container_width=True)
+                    else:
+                        st.info("Нет детекций.")
+
+                    st.markdown("### По окнам")
+                    st.dataframe(windows, use_container_width=True, height=350)
             except Exception as exc:  # pylint: disable=broad-except
                 st.error(f"Ошибка: {exc}")

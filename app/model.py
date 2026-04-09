@@ -39,6 +39,13 @@ class KwsInferenceService:
         self.model_path = self._resolve_model_path(model_path)
         self.model, self.labels = self._load_checkpoint(self.model_path)
         self.model_version = self.model_path.name
+        self.n_mels = int(self.model.mel.n_mels)
+        self.n_fft = int(self.model.mel.n_fft)
+        self.hop_length = int(self.model.mel.hop_length)
+        self.sample_rate = int(self.model.mel.sample_rate)
+        with torch.no_grad():
+            dummy = torch.zeros(1, self.sample_rate, device=self.device)
+            self.spec_frames = int(self.model.mel(dummy.unsqueeze(1)).shape[-1])
 
     @staticmethod
     def _resolve_model_path(model_path: str) -> Path:
@@ -89,6 +96,38 @@ class KwsInferenceService:
         start = time.perf_counter()
         with torch.no_grad():
             logits = self.model(x)
+            probs = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
+        infer_ms = (time.perf_counter() - start) * 1000
+
+        order = np.argsort(-probs)
+        ranked = {self.labels[int(i)]: float(probs[int(i)]) for i in order}
+        best = self.labels[int(order[0])]
+        return {
+            "predicted_class": best,
+            "confidence": float(probs[int(order[0])]),
+            "top_k": self._top_k(ranked, 5),
+            "inference_ms": infer_ms,
+        }
+
+    def predict_log_mels(self, log_mels: np.ndarray):
+        arr = np.asarray(log_mels, dtype=np.float32)
+        if arr.ndim == 2:
+            arr = arr[None, None, :, :]
+        elif arr.ndim == 3:
+            arr = arr[None, :, :, :]
+        if arr.ndim != 4:
+            raise ValueError("log_mels must have shape [n_mels, frames] or [1, n_mels, frames]")
+        if arr.shape[1] != 1:
+            raise ValueError("log_mels channel dim must be 1")
+        if arr.shape[2] != self.n_mels:
+            raise ValueError(f"n_mels mismatch: got {arr.shape[2]}, expected {self.n_mels}")
+        if arr.shape[3] != self.spec_frames:
+            raise ValueError(f"frames mismatch: got {arr.shape[3]}, expected {self.spec_frames}")
+
+        x = torch.from_numpy(arr).to(self.device)
+        start = time.perf_counter()
+        with torch.no_grad():
+            logits = self.model.forward_log_mels(x)
             probs = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
         infer_ms = (time.perf_counter() - start) * 1000
 

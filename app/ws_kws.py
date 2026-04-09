@@ -19,6 +19,9 @@ DEFAULT_REFRACTORY = 0.8
 DEFAULT_CONF = 0.55
 DEFAULT_LABELS = {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
 MAX_BUFFER_SEC = 4.0
+INPUT_AUDIO = "audio"
+INPUT_LOG_MEL = "log_mel"
+INPUT_AUDIO_VIA_LOG_MEL = "audio_via_log_mel"
 
 
 def _parse_config(text: str) -> dict[str, Any]:
@@ -37,6 +40,7 @@ def _parse_config(text: str) -> dict[str, Any]:
         target_labels = set(DEFAULT_LABELS)
     return {
         "sample_rate": sr,
+        "input_type": str(data.get("input_type", INPUT_AUDIO)),
         "poll_interval_sec": float(data.get("poll_interval_sec", DEFAULT_POLL)),
         "refractory_sec": float(data.get("refractory_sec", DEFAULT_REFRACTORY)),
         "confidence_threshold": float(data.get("confidence_threshold", DEFAULT_CONF)),
@@ -61,14 +65,26 @@ async def handle_kws_ws(websocket: WebSocket, service: KwsInferenceService) -> N
                 "type": "ready",
                 "model_version": service.model_version,
                 "labels": service.labels,
+                "spec": {
+                    "sample_rate": service.sample_rate,
+                    "n_fft": service.n_fft,
+                    "hop_length": service.hop_length,
+                    "n_mels": service.n_mels,
+                    "frames": service.spec_frames,
+                },
             }
         )
+    except WebSocketDisconnect:
+        logger.info("ws_kws disconnected before initial config")
+        return
     except (json.JSONDecodeError, ValueError, TypeError) as e:
-        await websocket.close(code=4400, reason=str(e)[:120])
+        if websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.close(code=4400, reason=str(e)[:120])
         return
 
     assert cfg is not None
     in_sr = cfg["sample_rate"]
+    input_type = cfg["input_type"]
     poll_iv = max(0.05, min(1.0, cfg["poll_interval_sec"]))
     refractory_sec = cfg["refractory_sec"]
     conf_thr = cfg["confidence_threshold"]
@@ -87,6 +103,7 @@ async def handle_kws_ws(websocket: WebSocket, service: KwsInferenceService) -> N
                 try:
                     cfg = _parse_config(message["text"])
                     in_sr = cfg["sample_rate"]
+                    input_type = cfg["input_type"]
                     poll_iv = max(0.05, min(1.0, cfg["poll_interval_sec"]))
                     refractory_sec = cfg["refractory_sec"]
                     conf_thr = cfg["confidence_threshold"]
@@ -116,28 +133,59 @@ async def handle_kws_ws(websocket: WebSocket, service: KwsInferenceService) -> N
             if stream_start_mono is None:
                 stream_start_mono = time.monotonic()
 
-            buf = np.concatenate([buf, chunk])
-            if buf.size > max_samples:
-                buf = buf[-max_samples:]
-
             now_m = time.monotonic()
-            win = int(1.0 * in_sr)
-            if buf.size < win or now_m - last_infer_mono < poll_iv:
-                continue
-
-            last_infer_mono = now_m
             frame_idx += 1
-            window_audio = buf[-win:].astype(np.float32, copy=False)
             t_sec = round(now_m - stream_start_mono, 3)
 
-            try:
-                pred = await asyncio.to_thread(service.predict, window_audio, in_sr)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("ws_kws_predict_failed")
-                if websocket.client_state == WebSocketState.CONNECTED:
+            if input_type in {INPUT_AUDIO, INPUT_AUDIO_VIA_LOG_MEL}:
+                buf = np.concatenate([buf, chunk])
+                if buf.size > max_samples:
+                    buf = buf[-max_samples:]
+
+                win = int(1.0 * in_sr)
+                if buf.size < win or now_m - last_infer_mono < poll_iv:
+                    continue
+                last_infer_mono = now_m
+                window_audio = buf[-win:].astype(np.float32, copy=False)
+                try:
+                    if input_type == INPUT_AUDIO:
+                        pred = await asyncio.to_thread(service.predict, window_audio, in_sr)
+                    else:
+                        pred = await asyncio.to_thread(service.predict_audio_via_log_mels, window_audio, in_sr)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("ws_kws_predict_failed")
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(
+                            {"type": "error", "message": str(exc), "frame_idx": frame_idx}
+                        )
+                    continue
+            elif input_type == INPUT_LOG_MEL:
+                expected = service.n_mels * service.spec_frames
+                if chunk.size != expected:
                     await websocket.send_json(
-                        {"type": "error", "message": str(exc), "frame_idx": frame_idx}
+                        {
+                            "type": "error",
+                            "message": f"log_mel size mismatch: got {chunk.size}, expected {expected}",
+                        }
                     )
+                    continue
+                if now_m - last_infer_mono < poll_iv:
+                    continue
+                last_infer_mono = now_m
+                log_mels = chunk.reshape(service.n_mels, service.spec_frames)
+                try:
+                    pred = await asyncio.to_thread(service.predict_log_mels, log_mels)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("ws_kws_predict_log_mel_failed")
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(
+                            {"type": "error", "message": str(exc), "frame_idx": frame_idx}
+                        )
+                    continue
+            else:
+                await websocket.send_json(
+                    {"type": "error", "message": f"unsupported input_type={input_type}"}
+                )
                 continue
 
             label = pred["predicted_class"]
