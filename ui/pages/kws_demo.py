@@ -28,7 +28,6 @@ audio_name = "recorded.wav"
 if recorded is not None:
     audio_bytes = recorded.getvalue()
     audio_name = "recorded.wav"
-    st.audio(audio_bytes, format="audio/wav")
     st.download_button(
         "Download recorded WAV",
         data=audio_bytes,
