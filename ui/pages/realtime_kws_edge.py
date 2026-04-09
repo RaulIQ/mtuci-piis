@@ -189,6 +189,7 @@ if start and not st.session_state.edge_rt_running:
         traffic=traf,
     )
     st.session_state.edge_rt_running = True
+    st.rerun()
 
 if stop and st.session_state.edge_rt_running:
     st.session_state.edge_rt_stop.set()
@@ -196,6 +197,7 @@ if stop and st.session_state.edge_rt_running:
     if th is not None:
         th.join(timeout=5.0)
     st.session_state.edge_rt_running = False
+    st.rerun()
 
 
 def _render_live_panel() -> None:
