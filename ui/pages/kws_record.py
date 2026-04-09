@@ -13,7 +13,10 @@ from services.api import get_api_url
 
 st.set_page_config(page_title="KWS Record", layout="centered")
 st.title("KWS record (~1 s)")
-st.caption("Record about one second from the microphone and run a single prediction (no sliding window).")
+st.caption(
+    "Record about one second from the microphone. The UI builds the same log-mel as the "
+    "model, then sends it to /predict-logmel (no raw WAV over inference for this page)."
+)
 
 api_url = get_api_url()
 st.write(f"API endpoint: `{api_url}`")
@@ -65,4 +68,5 @@ render_offline_inference(
     window_predictions_header=None,
     widget_key_prefix="kws_record_",
     forced_mode="predict",
+    use_client_logmel=True,
 )

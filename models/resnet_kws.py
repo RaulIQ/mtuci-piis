@@ -4,6 +4,23 @@ import torchaudio.transforms
 from torchvision import models
 
 
+def normalized_log_mel(
+    mel_transform: torchaudio.transforms.MelSpectrogram,
+    waveform_bt: torch.Tensor,
+) -> torch.Tensor:
+    """Same pipeline as training / server: Mel → log → per-utterance mean/std.
+
+    waveform_bt: [B, T] mono samples at `mel_transform.sample_rate`.
+    Returns tensor [B, 1, n_mels, time] for the ResNet backbone.
+    """
+    x = waveform_bt.unsqueeze(1)
+    mels = mel_transform(x)
+    log_mels = torch.log(mels + 1e-6)
+    mean = log_mels.mean(dim=(1, 2, 3), keepdim=True)
+    std = log_mels.std(dim=(1, 2, 3), keepdim=True)
+    return (log_mels - mean) / (std + 1e-6)
+
+
 class ResNetKWS(nn.Module):
     """ResNet-18 на лог-Mel; в чекпоинте обычно только `backbone.*` (как в lab3_resnet)."""
 
@@ -29,10 +46,4 @@ class ResNetKWS(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, T] сырые сэмплы 16 kHz, T == sample_rate (1 с)
-        x = x.unsqueeze(1)
-        mels = self.mel(x)
-        log_mels = torch.log(mels + 1e-6)
-        mean = log_mels.mean(dim=(1, 2, 3), keepdim=True)
-        std = log_mels.std(dim=(1, 2, 3), keepdim=True)
-        log_mels = (log_mels - mean) / (std + 1e-6)
-        return self.backbone(log_mels)
+        return self.backbone(normalized_log_mel(self.mel, x))
