@@ -1,14 +1,14 @@
-import os
-
-import requests
 import streamlit as st
+
+from components.offline_inference import render_offline_inference
+from services.api import get_api_url
 
 
 st.set_page_config(page_title="KWS Demo", layout="centered")
 st.title("KWS Inference UI")
 st.caption("Upload WAV and run single-shot or streaming-like KWS inference.")
 
-api_url = os.getenv("API_URL", "http://localhost:8000")
+api_url = get_api_url()
 st.write(f"API endpoint: `{api_url}`")
 
 st.markdown("### Audio source")
@@ -32,73 +32,23 @@ elif uploaded is not None:
     audio_bytes = uploaded.getvalue()
     audio_name = uploaded.name
 
-if audio_bytes is not None:
-    mode = st.radio(
-        "Mode",
-        ["Single prediction", "Sliding window stream simulation"],
-        index=0,
-    )
-
-    if mode == "Single prediction":
-        if st.button("Predict"):
-            try:
-                files = {"file": (audio_name, audio_bytes, "audio/wav")}
-                response = requests.post(f"{api_url}/predict", files=files, timeout=30)
-                if response.ok:
-                    data = response.json()
-                    st.success("Prediction complete")
-                    st.json(data)
-                else:
-                    st.error(f"Request failed: {response.status_code}")
-                    st.code(response.text)
-            except Exception as exc:  # pylint: disable=broad-except
-                st.error(f"Error: {exc}")
-    else:
-        st.markdown("### Sliding window parameters")
-        stride_sec = st.slider("Stride (seconds)", min_value=0.10, max_value=0.50, value=0.25, step=0.05)
-        refractory_sec = st.slider("Refractory period (seconds)", min_value=0.20, max_value=2.00, value=0.80, step=0.10)
-        confidence_threshold = st.slider("Confidence threshold", min_value=0.10, max_value=0.99, value=0.55, step=0.01)
-        target_labels_raw = st.text_input(
-            "Target labels (comma-separated)",
-            value="one,two,three,four,five,six,seven,eight,nine",
-        )
-        target_labels = {x.strip() for x in target_labels_raw.split(",") if x.strip()}
-
-        if st.button("Run stream simulation"):
-            try:
-                files = {"file": (audio_name, audio_bytes, "audio/wav")}
-                data = {
-                    "stride_sec": str(stride_sec),
-                    "refractory_sec": str(refractory_sec),
-                    "confidence_threshold": str(confidence_threshold),
-                    "target_labels": ",".join(sorted(target_labels)),
-                }
-                response = requests.post(
-                    f"{api_url}/predict-stream",
-                    files=files,
-                    data=data,
-                    timeout=60,
-                )
-                if not response.ok:
-                    st.error(f"Request failed: {response.status_code}")
-                    st.code(response.text)
-                else:
-                    payload = response.json()
-                    detections = payload.get("detections", [])
-                    rows = payload.get("window_predictions", [])
-
-                    st.success("Stream simulation completed")
-                    st.write(f"Windows processed: {payload.get('windows_processed', len(rows))}")
-                    st.write(f"Detections after refractory: {payload.get('detections_count', len(detections))}")
-
-                    if detections:
-                        st.markdown("### Final detections")
-                        st.dataframe(detections, use_container_width=True)
-                    else:
-                        st.info("No detections passed target/confidence/refractory conditions.")
-
-                    st.markdown("### Window-by-window predictions")
-                    st.dataframe(rows, use_container_width=True, height=350)
-            except Exception as exc:  # pylint: disable=broad-except
-                st.error(f"Error: {exc}")
+render_offline_inference(
+    api_url=api_url,
+    audio_bytes=audio_bytes,
+    audio_name=audio_name,
+    mode_label="Mode",
+    mode_options=["Single prediction", "Sliding window stream simulation"],
+    predict_button_label="Predict",
+    predict_success_text="Prediction complete",
+    request_failed_text="Request failed",
+    error_prefix="Error",
+    stream_params_header="### Sliding window parameters",
+    stream_button_label="Run stream simulation",
+    stream_success_text="Stream simulation completed",
+    windows_label="Windows processed",
+    detections_label="Detections after refractory",
+    empty_detections_text="No detections passed target/confidence/refractory conditions.",
+    detections_header="### Final detections",
+    window_predictions_header="### Window-by-window predictions",
+)
 
