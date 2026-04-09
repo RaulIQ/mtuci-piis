@@ -17,8 +17,9 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
   <div id="kwsMetrics" style="font-size:12px;line-height:1.5;color:#222;background:#f4f4f4;padding:8px 10px;border-radius:6px;margin:8px 0;">
     <strong>Трафик (клиент → WebSocket)</strong><br/>
     <span id="kwsMetUpTot">↑ 0 B</span> · <span id="kwsMetDownTot">↓ 0 B</span><br/>
-    <span id="kwsMetRates">скорость: ↑ — · ↓ —</span><br/>
-    <span style="color:#666;">Без учёта TCP/WS framing; PCM float32 непрерывно.</span>
+    <span id="kwsMetRates">мгновенно: ↑ — · ↓ —</span><br/>
+    <span id="kwsMetAvg">средняя за сессию: ↑ — · ↓ —</span><br/>
+    <span style="color:#666;">Без учёта TCP/WS framing; PCM float32 непрерывно. Средняя = всего / время с начала стрима.</span>
   </div>
   <div id="kwsCenter" style="min-height:200px;display:flex;align-items:center;justify-content:center;margin:16px 0;">
     <p id="kwsCenterText" style="margin:0;text-align:center;font-size:1.5rem;color:#888;">Скажите число</p>
@@ -56,6 +57,7 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
   let metPrevDown = 0;
   let metPrevT = performance.now();
   let metricsTimer = null;
+  let streamT0 = null;
   const te = new TextEncoder();
 
   function fmtBytes(n) {{
@@ -68,6 +70,7 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
     const elU = el("kwsMetUpTot");
     const elD = el("kwsMetDownTot");
     const elR = el("kwsMetRates");
+    const elA = el("kwsMetAvg");
     if (!elU) return;
     elU.textContent = "↑ " + fmtBytes(bytesUp);
     elD.textContent = "↓ " + fmtBytes(bytesDown);
@@ -79,7 +82,21 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
       metPrevUp = bytesUp;
       metPrevDown = bytesDown;
       metPrevT = now;
-      elR.textContent = "скорость: ↑ " + fmtBytes(Math.max(0, ru)) + "/s · ↓ " + fmtBytes(Math.max(0, rd)) + "/s";
+      elR.textContent = "мгновенно: ↑ " + fmtBytes(Math.max(0, ru)) + "/s · ↓ " + fmtBytes(Math.max(0, rd)) + "/s";
+    }}
+    if (elA) {{
+      if (streamT0 !== null) {{
+        const tSess = (now - streamT0) / 1000;
+        if (tSess >= 0.2) {{
+          const au = bytesUp / tSess;
+          const ad = bytesDown / tSess;
+          elA.textContent = "средняя за сессию: ↑ " + fmtBytes(Math.max(0, au)) + "/s · ↓ " + fmtBytes(Math.max(0, ad)) + "/s";
+        }} else {{
+          elA.textContent = "средняя за сессию: ↑ — · ↓ —";
+        }}
+      }} else {{
+        elA.textContent = "средняя за сессию: ↑ — · ↓ —";
+      }}
     }}
   }}
 
@@ -162,7 +179,10 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
     metPrevT = performance.now();
     updateMetricsDisplay();
     const elRate = el("kwsMetRates");
-    if (elRate) elRate.textContent = "скорость: ↑ — · ↓ —";
+    if (elRate) elRate.textContent = "мгновенно: ↑ — · ↓ —";
+    const elAvg = el("kwsMetAvg");
+    if (elAvg) elAvg.textContent = "средняя за сессию: ↑ — · ↓ —";
+    streamT0 = null;
     try {{
       if (proc) {{ proc.disconnect(); proc.onaudioprocess = null; proc = null; }}
       if (gain) {{ gain.disconnect(); gain = null; }}
@@ -248,6 +268,7 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
         const cfgStr = JSON.stringify(cfg);
         bytesUp += te.encode(cfgStr).length;
         ws.send(cfgStr);
+        streamT0 = performance.now();
         startMetricsTimer();
 
         src = ctx.createMediaStreamSource(stream);
@@ -284,4 +305,4 @@ def render_realtime_widget(ws_url: str, ws_config: dict) -> None:
 </script>
 """
 
-    components.html(html, height=520, scrolling=False)
+    components.html(html, height=540, scrolling=False)

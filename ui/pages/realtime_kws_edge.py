@@ -25,9 +25,9 @@ st.caption(
     "Микрофон — у той машины, где запущен Streamlit (не в браузере)."
 )
 st.caption(
-    "**Нагрузка на сеть (оценка на клиенте):** ниже в потоке — байты полезной нагрузки WS (JSON конфиг + сжатые NPZ "
-    "и входящие JSON). TCP/WebSocket framing не считаются. При том же шаге окна upload обычно **ниже**, чем у "
-    "«Realtime KWS» с непрерывным PCM."
+    "**Нагрузка на сеть (оценка на клиенте):** ниже — байты полезной нагрузки WS (JSON конфиг + сжатые NPZ и входящие JSON). "
+    "**Мгновенно** — за интервал обновления фрагмента; **средняя за сессию** — всего / время с «Старт» (после «Стоп» показывается "
+    "значение за последнюю сессию). Framing не считается; при том же шаге окна upload обычно ниже, чем у «Realtime KWS» (PCM)."
 )
 
 api_url = get_api_url()
@@ -167,6 +167,9 @@ if start and not st.session_state.edge_rt_running:
     st.session_state.edge_rt_q = queue.Queue()
     st.session_state.edge_rt_stop = threading.Event()
     st.session_state.edge_rt_traffic = WsTrafficCounter()
+    st.session_state.edge_rt_stream_t0 = time.monotonic()
+    st.session_state.edge_rt_session_avg_up = None
+    st.session_state.edge_rt_session_avg_down = None
     st.session_state._edge_traffic_prev = None
     st.session_state.edge_rt_lines.clear()
     st.session_state.edge_rt_center = None
@@ -196,6 +199,14 @@ if stop and st.session_state.edge_rt_running:
     th = st.session_state.get("edge_rt_thread")
     if th is not None:
         th.join(timeout=5.0)
+    t0 = st.session_state.get("edge_rt_stream_t0")
+    tc_stop = st.session_state.get("edge_rt_traffic")
+    if t0 is not None and isinstance(tc_stop, WsTrafficCounter):
+        elapsed = max(time.monotonic() - t0, 1e-9)
+        u_stop, d_stop = tc_stop.snapshot()
+        st.session_state.edge_rt_session_avg_up = u_stop / elapsed
+        st.session_state.edge_rt_session_avg_down = d_stop / elapsed
+    st.session_state.edge_rt_stream_t0 = None
     st.session_state.edge_rt_running = False
     st.rerun()
 
@@ -227,9 +238,27 @@ def _render_live_panel() -> None:
         with m2:
             st.metric("Принято (WS)", format_bytes(down))
         with m3:
-            st.metric("Скорость ↑", format_rate(rate_up))
+            st.metric("Мгновенно ↑", format_rate(rate_up))
         with m4:
-            st.metric("Скорость ↓", format_rate(rate_down))
+            st.metric("Мгновенно ↓", format_rate(rate_down))
+
+        t0 = st.session_state.get("edge_rt_stream_t0")
+        avg_up: float | None = None
+        avg_down: float | None = None
+        if st.session_state.edge_rt_running and t0 is not None:
+            elapsed = now - t0
+            if elapsed >= 0.05:
+                avg_up = up / elapsed
+                avg_down = down / elapsed
+        else:
+            avg_up = st.session_state.get("edge_rt_session_avg_up")
+            avg_down = st.session_state.get("edge_rt_session_avg_down")
+
+        a1, a2 = st.columns(2)
+        with a1:
+            st.metric("Средняя нагрузка ↑ (за сессию)", format_rate(avg_up) if avg_up is not None else "—")
+        with a2:
+            st.metric("Средняя нагрузка ↓ (за сессию)", format_rate(avg_down) if avg_down is not None else "—")
 
     center = st.session_state.edge_rt_center
     if center is not None:
