@@ -15,6 +15,30 @@ from kws_shared.waveform import SR, prepare_audio, to_model_waveform
 from models.resnet_kws import normalized_log_mel
 
 
+def _one_sec_chunk_to_logmel_row(
+    chunk: np.ndarray,
+    *,
+    mel: torchaudio.transforms.MelSpectrogram,
+    placeholder: np.ndarray,
+    sr: int,
+) -> tuple[np.ndarray, bool]:
+    """One second of PCM at ``sr`` → normalized log-mel [1,1,n_mels,time] or silence placeholder."""
+    win_size = int(1.0 * sr)
+    chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
+    if len(chunk) < win_size:
+        chunk = np.pad(chunk, (0, win_size - len(chunk)))
+    elif len(chunk) > win_size:
+        chunk = chunk[:win_size]
+    prepared = prepare_audio(chunk)
+    if prepared is None:
+        return placeholder.copy(), True
+    wave = to_model_waveform(prepared, sr=sr)
+    x = torch.from_numpy(wave).unsqueeze(0).float()
+    with torch.no_grad():
+        lm = normalized_log_mel(mel, x)
+    return lm.cpu().numpy().astype(np.float32), False
+
+
 def wav_bytes_to_normalized_logmel_npy(
     wav_bytes: bytes,
     *,
@@ -42,6 +66,47 @@ def wav_bytes_to_normalized_logmel_npy(
     arr = lm.cpu().numpy().astype(np.float32)
     buf = io.BytesIO()
     np.save(buf, arr, allow_pickle=False)
+    return buf.getvalue(), None
+
+
+def pcm16k_window_to_logmel_npz_bytes(
+    y_16k: np.ndarray,
+    t_sec: float,
+    *,
+    sample_rate: int,
+    n_fft: int,
+    hop_length: int,
+    n_mels: int,
+) -> tuple[bytes, str | None]:
+    """
+    Single 1 s window at model rate → NPZ with N=1 (``t_sec``, ``log_mel``, ``is_silence``).
+    Same layout as chunks from ``wav_bytes_to_sliding_logmel_npz_bytes`` for ``/ws/kws-logmel``.
+    """
+    if sample_rate != SR:
+        return b"", "mel sample_rate must match model SR (16 kHz)"
+
+    win_size = int(1.0 * SR)
+    mel = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sample_rate,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        n_mels=n_mels,
+    )
+    with torch.no_grad():
+        ref_lm = normalized_log_mel(mel, torch.zeros(1, win_size, dtype=torch.float32))
+    placeholder = np.zeros(ref_lm.shape, dtype=np.float32)
+
+    row, is_silence = _one_sec_chunk_to_logmel_row(
+        y_16k, mel=mel, placeholder=placeholder, sr=SR
+    )
+    stack = np.expand_dims(row, axis=0)
+    buf = io.BytesIO()
+    np.savez_compressed(
+        buf,
+        t_sec=np.asarray([t_sec], dtype=np.float64),
+        log_mel=stack,
+        is_silence=np.asarray([is_silence], dtype=np.bool_),
+    )
     return buf.getvalue(), None
 
 
@@ -88,18 +153,10 @@ def wav_bytes_to_sliding_logmel_npz_bytes(
         chunk = y[start:end]
         if len(chunk) < win_size:
             chunk = np.pad(chunk, (0, win_size - len(chunk)))
-        prepared = prepare_audio(chunk)
+        row, is_sil = _one_sec_chunk_to_logmel_row(chunk, mel=mel, placeholder=placeholder, sr=sr)
         t_list.append(start / float(sr))
-        if prepared is None:
-            silence_flags.append(True)
-            rows.append(placeholder.copy())
-        else:
-            wave = to_model_waveform(prepared, sr=sr)
-            x = torch.from_numpy(wave).unsqueeze(0).float()
-            with torch.no_grad():
-                lm = normalized_log_mel(mel, x)
-            silence_flags.append(False)
-            rows.append(lm.cpu().numpy().astype(np.float32))
+        silence_flags.append(is_sil)
+        rows.append(row)
 
     stack = np.stack(rows, axis=0)
     buf = io.BytesIO()
