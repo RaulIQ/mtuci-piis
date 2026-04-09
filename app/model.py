@@ -49,16 +49,19 @@ class KwsInferenceService:
         model.eval()
         return model, labels
 
+    def silence_prediction(self) -> dict:
+        ranked = {label: (1.0 if label == "silence" else 0.0) for label in self.labels}
+        return {
+            "predicted_class": "silence",
+            "confidence": 1.0,
+            "top_k": self._top_k(ranked, 5),
+            "inference_ms": 0.0,
+        }
+
     def predict(self, audio: np.ndarray, sr: int = SR):
         prepared = prepare_audio(audio)
         if prepared is None:
-            ranked = {label: (1.0 if label == "silence" else 0.0) for label in self.labels}
-            return {
-                "predicted_class": "silence",
-                "confidence": 1.0,
-                "top_k": self._top_k(ranked, 5),
-                "inference_ms": 0.0,
-            }
+            return self.silence_prediction()
 
         wave = to_model_waveform(prepared, sr=sr)
         x = torch.from_numpy(wave).unsqueeze(0).to(self.device)

@@ -12,20 +12,21 @@ from helpers.wav_duration import wav_duration_seconds
 from services.api import get_api_url
 
 st.set_page_config(page_title="KWS Record", layout="centered")
-st.title("KWS record (~1 s)")
+st.title("KWS record")
 st.caption(
-    "Record about one second from the microphone. The UI builds the same log-mel as the "
-    "model, then sends it to /predict-logmel (no raw WAV over inference for this page)."
+    "Up to ~1 s: single prediction via client-side log-mel → /predict-logmel. "
+    "Longer than 1 s: sliding-window stream simulation with the same log-mel per window → /predict-stream-logmel."
 )
 
 api_url = get_api_url()
 st.write(f"API endpoint: `{api_url}`")
 
 st.markdown("### Microphone")
-recorded = st.audio_input("Record ~1 s of audio")
+recorded = st.audio_input("Record audio (≤1 s for single shot, >1 s for stream mode)")
 
 audio_bytes = None
 inference_audio_bytes = None
+forced_mode: str | None = None
 audio_name = "recorded.wav"
 
 if recorded is not None:
@@ -39,12 +40,12 @@ if recorded is not None:
     duration_sec = wav_duration_seconds(audio_bytes)
     if duration_sec is not None:
         st.caption(f"Duration: {duration_sec:.2f} s.")
+        inference_audio_bytes = audio_bytes
+        forced_mode = "predict" if duration_sec <= 1.0 else "stream"
+        if duration_sec <= 1.0 and duration_sec < 0.85:
+            st.info("Aim for about 1 s for best alignment with the model.")
         if duration_sec > 1.0:
-            st.warning("Inference is disabled: audio must be at most 1.00 s.")
-        else:
-            inference_audio_bytes = audio_bytes
-            if duration_sec < 0.85:
-                st.info("Aim for about 1 s for best alignment with the model.")
+            st.info("Audio longer than 1 s — use «Run stream simulation» (client log-mel windows).")
     else:
         st.warning("Could not read WAV duration; inference is disabled.")
 
@@ -58,15 +59,15 @@ render_offline_inference(
     predict_success_text="Prediction complete",
     request_failed_text="Request failed",
     error_prefix="Error",
-    stream_params_header="",
-    stream_button_label="",
-    stream_success_text="",
-    windows_label="",
-    detections_label="",
-    empty_detections_text="",
-    detections_header=None,
-    window_predictions_header=None,
+    stream_params_header="### Sliding window parameters",
+    stream_button_label="Run stream simulation",
+    stream_success_text="Stream simulation completed",
+    windows_label="Windows processed",
+    detections_label="Detections after refractory",
+    empty_detections_text="No detections passed target/confidence/refractory conditions.",
+    detections_header="### Final detections",
+    window_predictions_header="### Window-by-window predictions",
     widget_key_prefix="kws_record_",
-    forced_mode="predict",
+    forced_mode=forced_mode,
     use_client_logmel=True,
 )

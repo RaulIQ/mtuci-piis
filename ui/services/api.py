@@ -44,3 +44,28 @@ def predict_stream(
         "target_labels": format_target_labels(target_labels_raw),
     }
     return requests.post(f"{api_url}/predict-stream", files=files, data=data, timeout=timeout)
+
+
+def predict_stream_logmel(
+    api_url: str,
+    npz_bytes: bytes,
+    *,
+    stride_sec: float,
+    refractory_sec: float,
+    confidence_threshold: float,
+    target_labels_raw: str,
+    timeout: int = 120,
+) -> requests.Response:
+    files = {"file": ("windows.npz", npz_bytes, "application/octet-stream")}
+    data = {
+        "stride_sec": str(stride_sec),
+        "refractory_sec": str(refractory_sec),
+        "confidence_threshold": str(confidence_threshold),
+        "target_labels": format_target_labels(target_labels_raw),
+    }
+    return requests.post(
+        f"{api_url}/predict-stream-logmel",
+        files=files,
+        data=data,
+        timeout=timeout,
+    )
