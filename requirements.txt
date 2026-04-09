@@ -16,5 +16,4 @@ python-multipart
 prometheus-client
 streamlit
 requests
-streamlit-webrtc
-av
+websockets

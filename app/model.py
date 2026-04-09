@@ -1,36 +1,13 @@
 import time
 from pathlib import Path
 
-import librosa
 import numpy as np
 import torch
 
+from kws_shared.waveform import prepare_audio, to_model_waveform
 from models.resnet_kws import ResNetKWS
 
-
 SR = 16000
-
-
-def to_model_waveform(y: np.ndarray, sr: int) -> np.ndarray:
-    y = np.asarray(y, dtype=np.float32).reshape(-1)
-    if sr != SR:
-        y = librosa.resample(y, orig_sr=sr, target_sr=SR)
-    if len(y) < SR:
-        y = np.pad(y, (0, SR - len(y)))
-    elif len(y) > SR:
-        y = y[:SR]
-    return y
-
-
-def prepare_audio(y: np.ndarray, silence_peak: float = 0.02, silence_rms: float = 0.006):
-    y = np.asarray(y, dtype=np.float32).reshape(-1)
-    peak = float(np.max(np.abs(y)))
-    rms = float(np.sqrt(np.mean(np.square(y))))
-
-    if peak < silence_peak and rms < silence_rms:
-        return None
-    y = (y / (peak + 1e-8)) * 0.95
-    return y
 
 
 class KwsInferenceService:
@@ -72,16 +49,19 @@ class KwsInferenceService:
         model.eval()
         return model, labels
 
+    def silence_prediction(self) -> dict:
+        ranked = {label: (1.0 if label == "silence" else 0.0) for label in self.labels}
+        return {
+            "predicted_class": "silence",
+            "confidence": 1.0,
+            "top_k": self._top_k(ranked, 5),
+            "inference_ms": 0.0,
+        }
+
     def predict(self, audio: np.ndarray, sr: int = SR):
         prepared = prepare_audio(audio)
         if prepared is None:
-            ranked = {label: (1.0 if label == "silence" else 0.0) for label in self.labels}
-            return {
-                "predicted_class": "silence",
-                "confidence": 1.0,
-                "top_k": self._top_k(ranked, 5),
-                "inference_ms": 0.0,
-            }
+            return self.silence_prediction()
 
         wave = to_model_waveform(prepared, sr=sr)
         x = torch.from_numpy(wave).unsqueeze(0).to(self.device)
@@ -89,6 +69,44 @@ class KwsInferenceService:
         start = time.perf_counter()
         with torch.no_grad():
             logits = self.model(x)
+            probs = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
+        infer_ms = (time.perf_counter() - start) * 1000
+
+        order = np.argsort(-probs)
+        ranked = {self.labels[int(i)]: float(probs[int(i)]) for i in order}
+        best = self.labels[int(order[0])]
+        return {
+            "predicted_class": best,
+            "confidence": float(probs[int(order[0])]),
+            "top_k": self._top_k(ranked, 5),
+            "inference_ms": infer_ms,
+        }
+
+    def mel_frontend_config(self) -> dict[str, int]:
+        m = self.model.mel
+        return {
+            "sample_rate": int(m.sample_rate),
+            "n_fft": int(m.n_fft),
+            "hop_length": int(m.hop_length),
+            "n_mels": int(m.n_mels),
+        }
+
+    def predict_from_normalized_logmel(self, log_mel: np.ndarray) -> dict:
+        """Run backbone + softmax on client-computed normalized log-mel (matches ``forward`` mel branch)."""
+        if log_mel.dtype != np.float32:
+            log_mel = np.asarray(log_mel, dtype=np.float32)
+        if log_mel.ndim != 4 or log_mel.shape[0] != 1 or log_mel.shape[1] != 1:
+            raise ValueError("expected log_mel shape [1, 1, n_mels, time]")
+        expected_mels = int(self.model.mel.n_mels)
+        if log_mel.shape[2] != expected_mels:
+            raise ValueError(
+                f"n_mels mismatch: array has {log_mel.shape[2]}, model expects {expected_mels}"
+            )
+
+        x = torch.from_numpy(log_mel).to(self.device)
+        start = time.perf_counter()
+        with torch.no_grad():
+            logits = self.model.backbone(x)
             probs = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
         infer_ms = (time.perf_counter() - start) * 1000
 

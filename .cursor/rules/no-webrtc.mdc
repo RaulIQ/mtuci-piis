@@ -1,0 +1,10 @@
+---
+description: Do not introduce WebRTC for UI or audio in this repo
+alwaysApply: true
+---
+
+# No WebRTC
+
+- Do **not** add or use `streamlit-webrtc`, `aiortc`, PyAV (`av`) for WebRTC, or other WebRTC-centric stacks unless the user explicitly overrides this rule.
+- Do **not** implement browser WebRTC (`RTCPeerConnection`, `getUserMedia` wired to WebRTC signalling, etc.) for recording or streaming in this project.
+- Prefer existing patterns: `st.audio_input`, file upload, WebSocket (`realtime_widget`), REST.

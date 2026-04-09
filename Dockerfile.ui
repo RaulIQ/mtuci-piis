@@ -9,6 +9,8 @@ COPY requirements.txt /ui/requirements.txt
 RUN pip install --no-cache-dir -r /ui/requirements.txt
 
 COPY ui /ui/ui
+COPY kws_shared /ui/kws_shared
+COPY models /ui/models
 
 EXPOSE 8501
 

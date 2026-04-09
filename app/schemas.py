@@ -1,6 +1,13 @@
 from pydantic import BaseModel
 
 
+class KwsMelConfigResponse(BaseModel):
+    sample_rate: int
+    n_fft: int
+    hop_length: int
+    n_mels: int
+
+
 class PredictAudioRequest(BaseModel):
     audio_base64: str
 

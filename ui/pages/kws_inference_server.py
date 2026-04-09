@@ -11,9 +11,12 @@ from components.offline_inference import render_offline_inference
 from helpers.wav_duration import wav_duration_seconds
 from services.api import get_api_url
 
-st.set_page_config(page_title="KWS Demo", layout="centered")
-st.title("KWS Inference UI")
-st.caption("Upload WAV and run single-shot or streaming-like KWS inference.")
+st.set_page_config(page_title="KWS — server inference", layout="centered")
+st.title("KWS — server-side inference")
+st.caption(
+    "Raw audio (upload or mic) is sent to the API as WAV. Mel spectrogram and the rest of the "
+    "pipeline run on the inference server (`/predict`, `/predict-stream`)."
+)
 
 api_url = get_api_url()
 st.write(f"API endpoint: `{api_url}`")

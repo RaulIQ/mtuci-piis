@@ -2,8 +2,18 @@ from typing import Literal
 
 import streamlit as st
 
+from helpers.client_logmel import (
+    wav_bytes_to_normalized_logmel_npy,
+    wav_bytes_to_sliding_logmel_npz_bytes,
+)
 from helpers.labels import DEFAULT_TARGET_LABELS
-from services.api import predict_audio, predict_stream
+from services.api import (
+    fetch_mel_config,
+    predict_audio,
+    predict_logmel_npy,
+    predict_stream,
+    predict_stream_logmel,
+)
 
 
 def render_stream_result(
@@ -56,6 +66,7 @@ def render_offline_inference(
     window_predictions_header: str | None = None,
     widget_key_prefix: str = "",
     forced_mode: Literal["predict", "stream"] | None = None,
+    use_client_logmel: bool = False,
 ) -> None:
     if audio_bytes is None:
         return
@@ -74,13 +85,36 @@ def render_offline_inference(
     if use_predict:
         if st.button(predict_button_label, key=f"{widget_key_prefix}predict_button"):
             try:
-                response = predict_audio(api_url, audio_name, audio_bytes)
-                if response.ok:
-                    st.success(predict_success_text)
-                    st.json(response.json())
+                if use_client_logmel:
+                    cfg_key = f"{widget_key_prefix}mel_cfg"
+                    if cfg_key not in st.session_state:
+                        st.session_state[cfg_key] = fetch_mel_config(api_url)
+                    cfg = st.session_state[cfg_key]
+                    npy_bytes, prep_err = wav_bytes_to_normalized_logmel_npy(
+                        audio_bytes,
+                        sample_rate=int(cfg["sample_rate"]),
+                        n_fft=int(cfg["n_fft"]),
+                        hop_length=int(cfg["hop_length"]),
+                        n_mels=int(cfg["n_mels"]),
+                    )
+                    if prep_err:
+                        st.warning(prep_err)
+                    else:
+                        response = predict_logmel_npy(api_url, npy_bytes)
+                        if response.ok:
+                            st.success(predict_success_text)
+                            st.json(response.json())
+                        else:
+                            st.error(f"{request_failed_text}: {response.status_code}")
+                            st.code(response.text)
                 else:
-                    st.error(f"{request_failed_text}: {response.status_code}")
-                    st.code(response.text)
+                    response = predict_audio(api_url, audio_name, audio_bytes)
+                    if response.ok:
+                        st.success(predict_success_text)
+                        st.json(response.json())
+                    else:
+                        st.error(f"{request_failed_text}: {response.status_code}")
+                        st.code(response.text)
             except Exception as exc:  # pylint: disable=broad-except
                 st.error(f"{error_prefix}: {exc}")
         return
@@ -118,15 +152,40 @@ def render_offline_inference(
 
     if st.button(stream_button_label, key=f"{widget_key_prefix}stream_button"):
         try:
-            response = predict_stream(
-                api_url,
-                audio_name,
-                audio_bytes,
-                stride_sec=stride_sec,
-                refractory_sec=refractory_sec,
-                confidence_threshold=confidence_threshold,
-                target_labels_raw=target_labels_raw,
-            )
+            if use_client_logmel:
+                cfg_key = f"{widget_key_prefix}mel_cfg"
+                if cfg_key not in st.session_state:
+                    st.session_state[cfg_key] = fetch_mel_config(api_url)
+                cfg = st.session_state[cfg_key]
+                npz_bytes, prep_err = wav_bytes_to_sliding_logmel_npz_bytes(
+                    audio_bytes,
+                    stride_sec=stride_sec,
+                    sample_rate=int(cfg["sample_rate"]),
+                    n_fft=int(cfg["n_fft"]),
+                    hop_length=int(cfg["hop_length"]),
+                    n_mels=int(cfg["n_mels"]),
+                )
+                if prep_err:
+                    st.warning(prep_err)
+                    return
+                response = predict_stream_logmel(
+                    api_url,
+                    npz_bytes,
+                    stride_sec=stride_sec,
+                    refractory_sec=refractory_sec,
+                    confidence_threshold=confidence_threshold,
+                    target_labels_raw=target_labels_raw,
+                )
+            else:
+                response = predict_stream(
+                    api_url,
+                    audio_name,
+                    audio_bytes,
+                    stride_sec=stride_sec,
+                    refractory_sec=refractory_sec,
+                    confidence_threshold=confidence_threshold,
+                    target_labels_raw=target_labels_raw,
+                )
             if not response.ok:
                 st.error(f"{request_failed_text}: {response.status_code}")
                 st.code(response.text)
