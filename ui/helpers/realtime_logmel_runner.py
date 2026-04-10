@@ -57,15 +57,29 @@ async def run_realtime_logmel_async(
             on_message({"type": "audio_status", "message": str(status)})
         audio_q.put(indata.copy())
 
-    stream = sd.InputStream(
-        samplerate=16000,
-        channels=1,
-        dtype="float32",
-        callback=_callback,
-        blocksize=blocksize,
-    )
+    stream: sd.InputStream | None = None
+    try:
+        stream = sd.InputStream(
+            samplerate=16000,
+            channels=1,
+            dtype="float32",
+            callback=_callback,
+            blocksize=blocksize,
+        )
+        stream.start()
+    except (OSError, sd.PortAudioError) as exc:
+        on_message(
+            {
+                "type": "runner_error",
+                "message": (
+                    f"микрофон: {exc}. В Docker нет ALSA по умолчанию — "
+                    "смонтируйте /dev/snd или запускайте Streamlit на хосте."
+                ),
+            }
+        )
+        on_message({"type": "runner_stopped"})
+        return
 
-    stream.start()
     try:
         async with websockets.connect(ws_url, max_size=None) as ws:
             payload_text = json.dumps(ws_payload)
@@ -144,8 +158,9 @@ async def run_realtime_logmel_async(
     except Exception as exc:  # pylint: disable=broad-except
         on_message({"type": "runner_error", "message": str(exc)})
     finally:
-        stream.stop()
-        stream.close()
+        if stream is not None:
+            stream.stop()
+            stream.close()
     on_message({"type": "runner_stopped"})
 
 
