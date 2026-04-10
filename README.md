@@ -12,18 +12,31 @@ Core components:
 - Request logging (SQLite)
 
 ## Minimum Requirements
-- Docker
-- Docker Compose
+- Docker and Docker Compose (inference API in a container)
+- Python 3.11+ with `requirements.txt` (Streamlit UI on the host)
 
 ## Run
+
+**1. API (Docker)**
 
 ```bash
 docker compose up --build
 ```
 
-API is available at:
-- `http://localhost:8000/docs`
+**2. UI (на хосте, в корне репозитория)**
+
+```bash
+pip install -r requirements.txt
+streamlit run ui/app.py --server.port 8501
+```
+
+По умолчанию UI ходит на `http://localhost:8000` (переменная `API_URL`).
+
+Доступ:
+- API: `http://localhost:8000/docs`
 - UI: `http://localhost:8501`
+
+Образ UI по-прежнему можно собрать из `Dockerfile.ui` вручную (`docker build -f Dockerfile.ui …`), в `docker-compose` он не поднимается.
 
 ## API Endpoints
 - `GET /health` - liveness
