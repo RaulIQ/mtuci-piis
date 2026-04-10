@@ -1,90 +1,121 @@
 # MTUCI PIIS - KWS Inference API
 
-## Project Overview
-Simple Keyword Spotting inference service based on Lab 3 model.
+## Общее описание проекта
 
-**Target deployment (ESP32):** In the intended setup, audio is captured on an **ESP32** and sent to the API—not from the browser. **Preprocessing** (e.g. feature extraction) can run **either on the ESP32 or on the server**, depending on the hybrid vs cloud-only mode. **Neural network inference** runs **on the server** (this service). The Streamlit UI and browser/curl examples are for development and demos.
+Проект представляет собой ML-сервис для распознавания голосовых команд (Keyword Spotting, KWS) с фокусом на команды `one`-`nine`.
 
-Core components:
-- Inference API (`FastAPI`)
-- Web UI (`Streamlit`)
-- Model artifact (`artifacts/kws_cnn.pt`, fallback from `artifacts/kwc_cnn.pt`)
-- Request logging (SQLite)
+Основная идея архитектуры:
+- аудио поступает от клиентского устройства (в целевом сценарии - ESP32);
+- инференс выполняется на сервере в API-сервисе;
+- сервис поддерживает одиночные и потоковые запросы;
+- предусмотрены логирование запросов и метрики для мониторинга.
 
-## Minimum Requirements
-- Docker and Docker Compose (inference API in a container)
-- Python 3.11+ with `requirements.txt` (Streamlit UI on the host)
+Ключевые компоненты:
+- API инференса на `FastAPI` (`app/`);
+- UI на `Streamlit` (`ui/`) для проверки и демонстрации API;
+- артефакт модели в `artifacts/`;
+- журнал запросов в SQLite (`DB_PATH`);
+- метрики в формате Prometheus (`/metrics`).
 
-## Run
+## Установка и запуск (Docker-first)
 
-**1. API (Docker)**
+### Требования
+
+- `Docker` и `Docker Compose` (обязательно для запуска API);
+- `Python 3.11+` и `pip` (для запуска UI на хосте).
+
+### 1) Запуск API в Docker
+
+Из корня репозитория:
 
 ```bash
 docker compose up --build
 ```
 
-**2. UI (на хосте, в корне репозитория)**
+После старта API доступен по адресу:
+- `http://localhost:8000/docs` - Swagger UI;
+- `http://localhost:8000/health` - liveness;
+- `http://localhost:8000/ready` - readiness;
+- `http://localhost:8000/metrics` - метрики Prometheus.
+
+### 2) Запуск UI отдельно (опционально, как example-клиент)
+
+UI не является обязательной частью контейнерного запуска API и используется как демонстрационный интерфейс для проверки работы сервиса.
 
 ```bash
 pip install -r requirements.txt
 streamlit run ui/app.py --server.port 8501
 ```
 
-По умолчанию UI ходит на `http://localhost:8000` (переменная `API_URL`).
+UI будет доступен на `http://localhost:8501`.
+По умолчанию UI обращается к API на `http://localhost:8000` (через `API_URL`).
 
-Доступ:
-- API: `http://localhost:8000/docs`
-- UI: `http://localhost:8501`
+## Примеры использования
 
-Образ UI по-прежнему можно собрать из `Dockerfile.ui` вручную (`docker build -f Dockerfile.ui …`), в `docker-compose` он не поднимается.
-
-## API Endpoints
-- `GET /health` - liveness
-- `GET /ready` - model loaded status and labels
-- `POST /predict` - WAV file upload (multipart)
-- `POST /predict-base64` - WAV bytes in base64 JSON
-- `POST /predict-stream` - server-side sliding window + refractory
-- `GET /metrics` - basic service metrics
-
-## How to Send Audio
-
-### Option 1: Upload WAV file
+### Ручной запрос через `curl` (WAV-файл)
 
 ```bash
 curl -X POST "http://localhost:8000/predict" \
   -F "file=@sample.wav"
 ```
 
-### Option 2: Send base64 WAV in JSON
+### Ручной запрос через JSON base64
 
 ```bash
 python3 - <<'PY'
-import base64, json, requests
+import base64
+import requests
 
 with open("sample.wav", "rb") as f:
     payload = {"audio_base64": base64.b64encode(f.read()).decode("utf-8")}
 
 r = requests.post("http://localhost:8000/predict-base64", json=payload, timeout=30)
-print(r.status_code, r.json())
+print(r.status_code)
+print(r.json())
 PY
 ```
 
-## Response Example
+### Взаимодействие через UI
+
+1. Убедитесь, что API запущен в Docker (`docker compose up --build`).
+2. Запустите `Streamlit` UI отдельной командой.
+3. Откройте `http://localhost:8501`.
+4. Выберите нужную страницу:
+   - `KWS · server (WAV)` - отправка WAV в API;
+   - `KWS · edge (log-mel)` - отправка признаков log-mel;
+   - `Realtime KWS` / `Realtime KWS · log-mel` - потоковые сценарии.
+
+### Пример ответа API
 
 ```json
 {
-  "predicted_class": "stop",
+  "predicted_class": "one",
   "confidence": 0.92,
   "latency_ms": 23.4,
-  "model_version": "kws_cnn.pt",
+  "model_version": "kws_resnet.pt",
   "top_k": [
-    {"stop": 0.92},
+    {"one": 0.92},
     {"unknown": 0.04},
     {"silence": 0.02}
   ]
 }
 ```
 
-## Documentation
-- Lab 4 report: `docs/lab4.md`
+## Эндпоинты API
+
+- `GET /health` - проверка, что сервис запущен;
+- `GET /ready` - проверка готовности модели;
+- `POST /predict` - предсказание по WAV-файлу;
+- `POST /predict-logmel` - предсказание по log-mel (`.npy`);
+- `POST /predict-base64` - предсказание по base64-аудио;
+- `POST /predict-stream` - потоковый режим для WAV;
+- `POST /predict-stream-logmel` - потоковый режим для log-mel (`.npz`);
+- `GET /metrics` - экспорт метрик Prometheus.
+
+## Документация и архитектура
+
+- Архитектура и обоснование: `docs/lab1.md`
+- Масштабирование и метрики (ЛР2): `docs/lab2.md`
+- Обучение/модель (ЛР3): `docs/lab3.md`
+- Интеграция и развёртывание (ЛР4): `docs/lab4.md`
 
