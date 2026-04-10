@@ -24,7 +24,7 @@
 - `Docker` и `Docker Compose` (обязательно для запуска API);
 - `Python 3.11+` и `pip` (для запуска UI на хосте).
 
-### 1) Запуск API в Docker
+### 1) Запуск API и мониторинга в Docker
 
 Из корня репозитория:
 
@@ -32,11 +32,15 @@
 docker compose up --build
 ```
 
-После старта API доступен по адресу:
+После старта доступны:
 - `http://localhost:8000/docs` - Swagger UI;
 - `http://localhost:8000/health` - liveness;
 - `http://localhost:8000/ready` - readiness;
 - `http://localhost:8000/metrics` - метрики Prometheus.
+- `http://localhost:9090` - Prometheus UI;
+- `http://localhost:3000` - Grafana (логин/пароль по умолчанию: `admin` / `admin`).
+
+Grafana автоматически получает datasource `Prometheus` через provisioning.
 
 ### 2) Запуск UI отдельно (опционально, как example-клиент)
 
@@ -111,6 +115,30 @@ PY
 - `POST /predict-stream` - потоковый режим для WAV;
 - `POST /predict-stream-logmel` - потоковый режим для log-mel (`.npz`);
 - `GET /metrics` - экспорт метрик Prometheus.
+
+## Мониторинг (Prometheus + Grafana)
+
+В `docker-compose` добавлены сервисы мониторинга:
+- `prometheus` собирает метрики API с `app:8000/metrics` по конфигу `monitoring/prometheus.yml`;
+- `grafana` подключается к Prometheus автоматически через `monitoring/grafana/provisioning/datasources/prometheus.yml`.
+
+Примеры запросов PromQL для панелей Grafana:
+
+```promql
+sum(rate(kws_requests_total[1m]))
+```
+
+```promql
+sum(rate(kws_requests_total{status="error"}[5m]))
+```
+
+```promql
+histogram_quantile(0.95, sum(rate(kws_request_latency_ms_bucket[5m])) by (le))
+```
+
+```promql
+histogram_quantile(0.95, sum(rate(kws_inference_latency_ms_bucket[5m])) by (le))
+```
 
 ## Документация и архитектура
 
